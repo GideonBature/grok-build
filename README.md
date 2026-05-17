@@ -33,15 +33,30 @@ Implemented and smoke-tested end-to-end against `grok` v0.1.211:
 
 ## Install
 
+### Prerequisite: Grok Build CLI
+
+Grok Build runs on **macOS and Linux** natively. On **Windows**, install it inside [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and use VS Code's [Remote-WSL](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl) extension so the sidebar runs on the WSL side where `grok` is reachable. A native Win32 build is on xAI's roadmap with no announced date.
+
 ```bash
-# 1. Install the Grok CLI (xAI's official Grok Build)
+# macOS / Linux / WSL2 Ubuntu
 curl -fsSL https://x.ai/cli/install.sh | bash
 
-# 2. Authenticate (either):
+# Authenticate (either):
 grok login                              # browser flow
 # or
 export GROK_CODE_XAI_API_KEY="xai-..."  # from console.x.ai
 ```
+
+**Windows setup (one-time):**
+
+```powershell
+wsl --install -d Ubuntu                 # installs Ubuntu (reboot may be required)
+# inside Ubuntu:
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login
+```
+
+Then open VS Code, install the **Remote - WSL** extension, and reopen the workspace via *Remote-WSL: Reopen Folder in WSL*. Install the .vsix inside the WSL VS Code server (paths below run identically).
 
 Then pick one of three install paths:
 
