@@ -62,6 +62,26 @@ describe("parseAcpLine", () => {
       expect(r.id).toBe(99);
     }
   });
+
+  it("parses exit_plan_mode request and exposes planContent in params", () => {
+    const r = parseAcpLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "_x.ai/exit_plan_mode",
+        params: {
+          sessionId: "abc",
+          toolCallId: "call-1",
+          planContent: "# My Plan\nStep 1",
+        },
+      }),
+    );
+    expect(r?.kind).toBe("server-request");
+    if (r?.kind === "server-request") {
+      expect(r.method).toBe("_x.ai/exit_plan_mode");
+      expect(r.params.planContent).toBe("# My Plan\nStep 1");
+    }
+  });
 });
 
 describe("routeSessionUpdate", () => {
@@ -94,10 +114,11 @@ describe("routeSessionUpdate", () => {
     if (r?.event === "commandsUpdate") expect(r.commands).toHaveLength(1);
   });
 
-  it("routes plan update", () => {
-    const r = routeSessionUpdate({ sessionUpdate: "plan", plan: "Step 1\nStep 2" });
+  it("routes plan update and passes full payload", () => {
+    const payload = { sessionUpdate: "plan", planContent: "Step 1\nStep 2", planFilePath: "/tmp/plan.md" };
+    const r = routeSessionUpdate(payload);
     expect(r?.event).toBe("plan");
-    if (r?.event === "plan") expect(r.payload.plan).toBe("Step 1\nStep 2");
+    if (r?.event === "plan") expect(r.payload).toBe(payload);
   });
 
   it("falls through to generic update for unknown tags", () => {

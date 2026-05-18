@@ -202,14 +202,16 @@ The mode button in the bottom toolbar opens a picker with three options:
 | Mode | Behaviour |
 |---|---|
 | **Agent mode** | Normal mode — the agent acts and asks for permission when needed |
-| **Plan mode** | The agent drafts a complete plan and waits for your Approve / Reject before doing anything |
+| **Plan mode** | ⚠️ Disabled — see note below |
 | **YOLO** | Auto-approves every permission request; no cards shown. Handled entirely in the extension — the CLI process and its session are preserved, no restart |
 
-Switching from YOLO back to Agent or Plan re-enables permission cards immediately.
+Switching from YOLO back to Agent re-enables permission cards immediately.
+
+> **Plan mode — current limitation:** Plan mode is disabled in the extension because the `x.ai/exit_plan_mode` ACP response path in the current CLI version does not support rejection or abandonment — any client response (result or error) is treated as approval. Enabling plan mode without working Reject/Abandon buttons would silently approve every plan. This will be re-enabled once the CLI wires up the external-client rejection code path.
 
 **How modes map to ACP internally:**
 - **Agent** → `session/set_mode: "agent"` sent to the CLI. The CLI asks for permission before each write or shell action.
-- **Plan** → `session/set_mode: "plan"` sent to the CLI. The CLI collects a full plan and sends it back via `x.ai/exit_plan_mode`; the extension shows an Approve / Abandon / Reject card.
+- **Plan** → `session/set_mode: "plan"` sent to the CLI. The CLI collects a full plan and sends it back via `x.ai/exit_plan_mode`. *Not yet usable via ACP — see above.*
 - **YOLO** → no ACP call; the extension simply auto-responds "allow always" to every incoming `session/request_permission` request. The session and CLI process are untouched.
 
 ### Reasoning Effort

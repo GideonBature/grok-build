@@ -74,6 +74,8 @@
       icon: ICON.listTree,
       label: "Plan mode",
       desc: "Grok will explore the task and present a plan before acting",
+      disabled: true,
+      disabledNote: "Reject / Abandon not yet supported by the CLI via ACP — any response is treated as approval.",
     },
     yolo: {
       icon: ICON.zap,
@@ -373,16 +375,20 @@
     for (const [id, meta] of Object.entries(MODE_META)) {
       const el = document.createElement("div");
       const active = id === state.currentModeId;
-      el.className = "toolbar-popover-item mode-popover-item" + (active ? " active" : "");
+      el.className = "toolbar-popover-item mode-popover-item" +
+        (active ? " active" : "") +
+        (meta.disabled ? " disabled" : "");
       el.innerHTML =
         `<span class="mode-item-icon">${meta.icon}</span>` +
         `<span class="mode-item-body">` +
           `<span class="mode-item-label">${escapeHtml(meta.label)}</span>` +
           `<span class="mode-item-desc">${escapeHtml(meta.desc)}</span>` +
+          (meta.disabledNote ? `<span class="mode-item-disabled-note">${escapeHtml(meta.disabledNote)}</span>` : "") +
         `</span>` +
         (active ? '<span class="popover-check">✓</span>' : "");
       el.onclick = (e) => {
         e.stopPropagation();
+        if (meta.disabled) return;
         vscode.postMessage({ type: "setMode", modeId: id });
         closePopovers();
       };
