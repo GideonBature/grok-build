@@ -49,6 +49,17 @@ export function sessionsDirFor(grokHome: string, cwd: string): string {
   return path.join(grokHome, "sessions", encodeURIComponent(cwd));
 }
 
+/**
+ * Generate an auto-title from the first user message: trim whitespace, collapse runs
+ * of spaces, and truncate to 50 chars with an ellipsis. Returns `null` when the input
+ * has no usable content.
+ */
+export function pickSessionTitle(firstMessage: string): string | null {
+  const cleaned = (firstMessage || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  return cleaned.length > 50 ? cleaned.slice(0, 47) + "…" : cleaned;
+}
+
 /** Default friendly name when no `customName` or `session_summary` is available. */
 export function fallbackName(summary: string, updatedAt: number): string {
   const s = (summary || "").trim();

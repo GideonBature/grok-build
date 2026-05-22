@@ -922,6 +922,7 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   flex-direction: column;
   padding: 4px;
 }
+.history-popover[hidden] { display: none; }
 .history-search-wrap { padding: 4px; }
 .history-search {
   width: 100%;

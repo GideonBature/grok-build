@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.4 — 2026-05-22
+
+### Sessions
+
+- **Multi-session history.** Clock icon in the top bar lists every session grok stored under `~/.grok/sessions/<urlencoded-cwd>/`. Click a row to resume (via `session/load`); hover for rename/delete. Renames live in VS Code's `globalState` under `grok.sessionMeta` — we never edit grok's own session files.
+- **Auto-titles from the first user message.** New sessions get a 50-char preview of the first prompt as their display name. Existing custom names always win.
+
+### Composer
+
+- **File picker.** `+` button in the bottom toolbar → *Upload from computer* opens VS Code's native multi-select file dialog. Picked files are added as `@path` chips, same as drag-from-Explorer — no contents embedded.
+
+### Chat
+
+- **Clickable file references.** Inline code spans that look like a path with a known extension (e.g. `` `src/sidebar.ts:42` ``, `` `media/chat.js#L10-L20` ``) now render as links. Clicking opens the file in VS Code and reveals the referenced line range.
+
+### Metadata
+
+- **Extension description and README lead rewritten** to put the UX first: "Grok Build Visual Studio Code extension. A user-friendly embedded chat UI — not a terminal launcher." The ACP-wrapper framing moved into the second paragraph. Same content, different emphasis — how it feels to use, before how it's built. "Why an extension, not the CLI?" now leads with the toolbar dropdowns, file-ref links, and message-copy UX before the more technical bullets.
+
+### Tests
+
+- **115 unit tests + 5 grok-CLI integration tests.** Two pure helpers — `parseFileRef` ([src/file-ref.ts](src/file-ref.ts)) and `pickSessionTitle` ([src/sessions.ts](src/sessions.ts)) — extracted from the sidebar and covered with focused tests. A new integration suite in `test/integration/` spawns a real `grok agent stdio`, exercises `session/new` → on-disk `summary.json` shape → `listSessions` → `session/load` → `deleteSessionDir`, and is excluded from CI (GitHub has no grok binary). Run locally with `npm run test:integration`.
+
+---
+
 ## 1.0.3 — 2026-05-19
 
 ### Tool calls

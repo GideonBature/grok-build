@@ -95,6 +95,18 @@ describe("routeSessionUpdate", () => {
     expect(r).toEqual({ event: "thoughtChunk", text: "y" });
   });
 
+  // Replayed by `session/load` for historical turns — without this route the user
+  // messages vanish from the UI and consecutive agent turns merge into one bubble.
+  it("routes user_message_chunk", () => {
+    const r = routeSessionUpdate({ sessionUpdate: "user_message_chunk", content: { text: "hi grok" } });
+    expect(r).toEqual({ event: "userMessage", text: "hi grok" });
+  });
+
+  it("user_message_chunk tolerates missing content.text", () => {
+    const r = routeSessionUpdate({ sessionUpdate: "user_message_chunk" });
+    expect(r).toEqual({ event: "userMessage", text: "" });
+  });
+
   it("routes tool_call and tool_call_update", () => {
     expect(routeSessionUpdate({ sessionUpdate: "tool_call", toolCallId: "t1" })?.event).toBe("toolCall");
     expect(routeSessionUpdate({ sessionUpdate: "tool_call_update", toolCallId: "t1" })?.event).toBe("toolCallUpdate");

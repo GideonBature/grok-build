@@ -1,8 +1,8 @@
 {
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build",
-  "description": "Thin VS Code sidebar client for the Grok Build CLI over Agent Client Protocol (ACP). Streams responses with thinking traces, tool calls, file chips, and permission cards with diff preview. All session state stays in the CLI. Not affiliated with xAI.",
-  "version": "1.0.3",
+  "description": "A user-friendly Visual Studio Code extension. An embedded chat UI — not a terminal launcher. Streams responses with thinking traces, tool calls, file chips, session history, clickable file references, and permission cards with diff preview. Not affiliated with xAI.",
+  "version": "1.0.4",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
@@ -166,6 +166,7 @@
     "watch": "tsc -p . -w",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "package": "npx @vscode/vsce package --no-dependencies",
     "publish": "npx @vscode/vsce publish --no-dependencies"
   },

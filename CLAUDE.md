@@ -4,7 +4,7 @@ VS Code sidebar extension for **xAI's Grok Build CLI**, driven by `grok agent st
 
 ## Status
 
-v1.0.3 (published on the VS Code Marketplace). 94 unit tests passing. Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL.
+v1.0.3 (published on the VS Code Marketplace). 115 unit tests + 5 grok-CLI integration tests passing. Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL.
 
 ## Module map
 
@@ -19,21 +19,25 @@ v1.0.3 (published on the VS Code Marketplace). 94 unit tests passing. Smoke-test
 | `src/chips.ts` | File-chip CRUD (pure) |
 | `src/prompt-builder.ts` | Chip → prompt-string with `@path` refs and fenced code blocks |
 | `src/slash-filter.ts` | Slash-command autocomplete filter |
-| `src/sessions.ts` | Disk-driven session listing/delete + customName overrides (pure) |
+| `src/sessions.ts` | Disk-driven session listing/delete + customName overrides + auto-title (pure) |
+| `src/file-ref.ts` | Parse `path#L10-L20` style file references (pure) |
 | `media/chat.{js,css}` | Webview UI |
 | `media/webview-helpers.js` | Pure webview helpers (file-ref detection, relative-time format); shared between webview and tests |
 | `scripts/install.{ps1,sh}` | Auto-detect VS Code CLI, build .vsix, install |
 | `scripts/uninstall.{ps1,sh}` | Uninstall `PawelHuryn.grok-vscode-phuryn` |
 
-Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-locator`, `sessions`, `webview-helpers`) were split out specifically so protocol behavior can be unit-tested without spawning processes.
+Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-locator`, `sessions`, `file-ref`, `webview-helpers`) were split out specifically so protocol behavior can be unit-tested without spawning processes.
 
 ## Build + test
 
 ```bash
 npm install
-npm test         # 94 tests, <2s, vitest
-npm run package  # → grok-vscode-phuryn-1.0.3.vsix
+npm test                # 115 unit tests, <2s, vitest (CI-safe)
+npm run test:integration # 5 grok-CLI tests; requires a real `grok` binary locally
+npm run package         # → grok-vscode-phuryn-1.0.4.vsix
 ```
+
+Integration tests in `test/integration/` spawn `grok agent stdio` and are excluded from the default `npm test` (which is what CI runs). They skip gracefully when `grok` is not on PATH.
 
 ## Install
 
@@ -87,5 +91,5 @@ Per-release: bump version in `package.json`, `npm test`, `npm run publish`. The 
 - Commits explain the *why*, not the *what*
 - Don't introduce abstractions speculatively
 - Don't add comments that explain what well-named code already says
-- 94 tests is the floor — every PR should keep that green
+- 115 unit tests is the floor — every PR should keep that green
 - **Version bumps are user-initiated.** Iterate at the current version (rebuild the same vsix and reinstall locally) until the user says to bump and publish. Don't bump `package.json` on your own.

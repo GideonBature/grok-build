@@ -6,6 +6,7 @@ import {
   deleteSessionDir,
   fallbackName,
   listSessions,
+  pickSessionTitle,
   sessionsDirFor,
 } from "../src/sessions";
 
@@ -76,6 +77,33 @@ describe("sessionsDirFor", () => {
   it("URL-encodes a nested cwd path", () => {
     const out = sessionsDirFor("/h/.grok", "/work/space");
     expect(out).toBe(path.join("/h/.grok", "sessions", "%2Fwork%2Fspace"));
+  });
+});
+
+describe("pickSessionTitle", () => {
+  it("returns null on empty or whitespace-only input", () => {
+    expect(pickSessionTitle("")).toBe(null);
+    expect(pickSessionTitle("   \n\t  ")).toBe(null);
+  });
+
+  it("returns the trimmed message when short", () => {
+    expect(pickSessionTitle("  Fix login bug  ")).toBe("Fix login bug");
+  });
+
+  it("collapses internal whitespace into single spaces", () => {
+    expect(pickSessionTitle("Fix   the\n\nbug   here")).toBe("Fix the bug here");
+  });
+
+  it("truncates messages over 50 chars and appends an ellipsis", () => {
+    const long = "a".repeat(80);
+    const out = pickSessionTitle(long)!;
+    expect(out.length).toBe(48); // 47 chars + ellipsis (1 char)
+    expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("keeps messages at exactly 50 chars intact", () => {
+    const exact = "a".repeat(50);
+    expect(pickSessionTitle(exact)).toBe(exact);
   });
 });
 

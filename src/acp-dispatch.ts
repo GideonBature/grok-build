@@ -33,6 +33,7 @@ export function parseAcpLine(line: string): DispatchEvent | null {
 }
 
 export type UpdateRoute =
+  | { event: "userMessage"; text: string }
   | { event: "messageChunk"; text: string }
   | { event: "thoughtChunk"; text: string }
   | { event: "toolCall"; payload: any }
@@ -45,6 +46,11 @@ export type UpdateRoute =
 export function routeSessionUpdate(u: any): UpdateRoute | null {
   if (!u) return null;
   switch (u.sessionUpdate) {
+    // Only emitted while replaying history via session/load. Routing it lets the
+    // host re-render past user turns and reset the active agent bubble so the
+    // next replayed agent turn starts a fresh message.
+    case "user_message_chunk":
+      return { event: "userMessage", text: u.content?.text ?? "" };
     case "agent_message_chunk":
       return { event: "messageChunk", text: u.content?.text ?? "" };
     case "agent_thought_chunk":

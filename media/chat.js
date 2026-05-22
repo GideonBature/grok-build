@@ -1307,6 +1307,15 @@
         state.commands = msg.commands || [];
         break;
       case "userMessage":
+        // Close any active agent/thought bubble so replayed turns (which arrive
+        // without promptComplete between them) don't merge into one message.
+        flushAgent();
+        state.activeAgentEl = null;
+        state.activeAgentRaw = "";
+        state.activeThoughtEl = null;
+        state.activeThoughtHdrEl = null;
+        state.thoughtStartTime = null;
+        closeToolGroup();
         addMessage("user", msg.text, msg.chips || []);
         break;
       case "agentStart":
@@ -1408,6 +1417,7 @@
 
   sendBtn.onclick = send;
   newBtn.onclick = () => {
+    closePopovers();
     resetForNewSession();
     vscode.postMessage({ type: "newSession" });
   };

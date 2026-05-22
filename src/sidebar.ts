@@ -19,8 +19,10 @@ import {
   defaultFs,
   deleteSessionDir,
   listSessions,
+  pickSessionTitle,
   resolveGrokHome,
 } from "./sessions";
+import { parseFileRef } from "./file-ref";
 
 type WebviewMsg =
   | { type: "ready" }
@@ -258,6 +260,10 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       if (gen !== this.sessionGen) return;
       this.post({ type: "commandsUpdate", commands: cmds });
     });
+    client.on("userMessage", (text: string) => {
+      if (gen !== this.sessionGen) return;
+      this.post({ type: "userMessage", text, chips: [] });
+    });
     client.on("messageChunk", (text: string) => {
       if (gen !== this.sessionGen) return;
       this.post({ type: "messageChunk", text });
@@ -371,18 +377,16 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
         this.postChips();
         break;
       case "openFile": {
-        const m = msg.path.match(/^([^#]+?)(?:#L(\d+)(?:-L?(\d+))?)?$/i);
-        let p = m ? m[1] : msg.path;
-        const startStr = m && m[2];
-        const endStr = m && m[3];
+        const ref = parseFileRef(msg.path);
+        let p = ref.path;
         if (!path.isAbsolute(p)) {
           const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           if (root) p = path.join(root, p);
         }
         const uri = vscode.Uri.file(p);
-        if (startStr) {
-          const startLine = Math.max(0, Number(startStr) - 1);
-          const endLine = endStr ? Math.max(startLine, Number(endStr) - 1) : startLine;
+        if (ref.startLine != null) {
+          const startLine = ref.startLine - 1;
+          const endLine = (ref.endLine ?? ref.startLine) - 1;
           try {
             const doc = await vscode.workspace.openTextDocument(uri);
             await vscode.window.showTextDocument(doc, {
@@ -689,9 +693,8 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     this.titleGenerated = true;
     const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
     if (overrides[sid]?.customName) return;
-    const cleaned = first.replace(/\s+/g, " ").trim();
-    if (!cleaned) return;
-    const title = cleaned.length > 50 ? cleaned.slice(0, 47) + "…" : cleaned;
+    const title = pickSessionTitle(first);
+    if (!title) return;
     const next: SessionMetaOverrides = {
       ...overrides,
       [sid]: { ...(overrides[sid] ?? {}), customName: title },
