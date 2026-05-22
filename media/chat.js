@@ -624,12 +624,6 @@
         name.className = "history-row-name";
         name.textContent = s.displayName || "Untitled";
         name.title = s.rawSummary || s.displayName || "";
-        name.onclick = (e) => {
-          e.stopPropagation();
-          if (active) { closePopovers(); return; }
-          vscode.postMessage({ type: "resumeSession", id: s.id });
-          closePopovers();
-        };
         main.appendChild(name);
 
         const meta = document.createElement("div");
@@ -639,6 +633,13 @@
         parts.push(formatRelativeTime(s.updatedAt));
         meta.textContent = parts.join(" · ");
         main.appendChild(meta);
+
+        row.onclick = (e) => {
+          e.stopPropagation();
+          if (active) { closePopovers(); return; }
+          vscode.postMessage({ type: "resumeSession", id: s.id });
+          closePopovers();
+        };
       }
 
       row.appendChild(main);
@@ -721,12 +722,15 @@
   function showOnboarding(mode, info) {
     info = info || {};
     const welcome = $("welcome");
-    if (welcome) welcome.hidden = false;
-    state.welcomeVisible = true;
     const tips = $("welcome-tips");
     const onb = $("welcome-onboarding");
     const ver = $("welcome-version");
     if (!onb) return;
+    const isBlocking = mode === "missing-cli" || mode === "auth-required";
+    if (isBlocking) {
+      if (welcome) welcome.hidden = false;
+      state.welcomeVisible = true;
+    }
     if (mode === "missing-cli") {
       if (tips) tips.hidden = true;
       if (info.platform === "win32") {
@@ -756,7 +760,7 @@
         `<div class="onb">` +
           `<p class="onb-heading">Sign in to continue</p>` +
           `<p class="onb-desc"><strong>SuperGrok Heavy subscription</strong> &mdash; required for the <em>Grok Build</em> entitlement.</p>` +
-          `<button class="onb-action" type="button" data-act="runLogin">Open terminal &amp; run <code>grok /login</code></button>` +
+          `<button class="onb-action" type="button" data-act="runLogin">Open terminal &amp; run <code>grok login</code></button>` +
           `<p class="onb-or">or</p>` +
           `<p class="onb-desc"><strong>API key</strong> &mdash; pay per token; unlocks additional models (grok-4.20, grok-4.3, grok-imagine). Get a key at <a href="https://console.x.ai" class="onb-link">console.x.ai</a>, then add to your shell or a workspace <code>.env</code>:</p>` +
           `<div class="onb-cmd">` +

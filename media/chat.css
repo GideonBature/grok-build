@@ -142,7 +142,7 @@ code {
   gap: 10px;
   margin-top: 16px;
   text-align: left;
-  max-width: 320px;
+  max-width: 384px;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -986,10 +986,13 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   border: none;
   color: var(--vscode-foreground);
   cursor: pointer;
-  padding: 2px 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border-radius: 3px;
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 .history-action-btn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(255,255,255,0.08)); }
 .history-action-danger:hover { color: var(--vscode-errorForeground); }

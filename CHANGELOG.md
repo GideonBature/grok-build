@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.5 — 2026-05-23
+
+### Onboarding UX
+
+- **Re-check connection actually resets state.** Clicking the button on the missing-CLI or auth-required panel now wipes any prior error (e.g. *"Grok exited (code 143)…"*) and clears the onboarding panel on success. Previously the panel and stale errors stuck around until you clicked *New Session*.
+- **Wider onboarding panel.** `max-width` bumped 320 → 384px so the `curl -fsSL https://x.ai/cli/install.sh | bash` line fits without breaking across two rows in normal sidebar widths.
+
+### Buttons
+
+- **Auth button now runs the right command.** The *"Open terminal & run"* button on the auth-required screen, and the terminal command it executes, are now `grok login` — not `grok /login`. The slash prefix was a leftover from in-CLI slash commands and produced *"unknown command"* in the terminal.
+
+### Clickable areas
+
+- **Session history rows are fully clickable.** Clicking anywhere on a row in the history popover resumes the session — previously only the name text was the click target, so the surrounding row whitespace did nothing. Rename and delete icon buttons in the same row also got proper 24×24 hit targets instead of the prior tight 2×4 padding.
+
+---
+
 ## 1.0.4 — 2026-05-22
 
 ### Sessions

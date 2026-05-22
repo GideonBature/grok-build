@@ -333,6 +333,7 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
         this.activeSessionId = client.sessionId;
       }
       if (gen !== this.sessionGen) { client.dispose(); this.client = undefined; return undefined; }
+      this.post({ type: "onboarding", state: "ok" });
     } catch (err) {
       if (gen !== this.sessionGen) { client.dispose(); return undefined; }
       const msg = (err as any).message ?? String(err);
@@ -523,10 +524,11 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
         }
         const term = vscode.window.createTerminal("Grok Login");
         term.show();
-        term.sendText(`"${cliPath}" /login`);
+        term.sendText(`"${cliPath}" login`);
         break;
       }
       case "recheckConnection":
+        this.post({ type: "clearMessages" });
         await this.startSession();
         break;
       case "listSessions":
