@@ -25,7 +25,7 @@ function Find-CodeCli {
 if (-not $VsixPath) {
     $vsix = Get-ChildItem -Path $repoRoot -Filter "*.vsix" | Select-Object -First 1
     if (-not $vsix) {
-        Write-Host "No .vsix found — building one..."
+        Write-Host "No .vsix found - building one..."
         Push-Location $repoRoot
         try {
             if (-not (Test-Path "node_modules")) { npm install }

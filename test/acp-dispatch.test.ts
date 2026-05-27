@@ -90,6 +90,11 @@ describe("routeSessionUpdate", () => {
     expect(r).toEqual({ event: "messageChunk", text: "x" });
   });
 
+  it("routes user message chunk (replayed on session/load)", () => {
+    const r = routeSessionUpdate({ sessionUpdate: "user_message_chunk", content: { text: "hello" } });
+    expect(r).toEqual({ event: "userMessageChunk", text: "hello" });
+  });
+
   it("routes thought chunk", () => {
     const r = routeSessionUpdate({ sessionUpdate: "agent_thought_chunk", content: { text: "y" } });
     expect(r).toEqual({ event: "thoughtChunk", text: "y" });

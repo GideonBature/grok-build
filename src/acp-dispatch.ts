@@ -34,6 +34,7 @@ export function parseAcpLine(line: string): DispatchEvent | null {
 
 export type UpdateRoute =
   | { event: "messageChunk"; text: string }
+  | { event: "userMessageChunk"; text: string }
   | { event: "thoughtChunk"; text: string }
   | { event: "toolCall"; payload: any }
   | { event: "toolCallUpdate"; payload: any }
@@ -47,6 +48,8 @@ export function routeSessionUpdate(u: any): UpdateRoute | null {
   switch (u.sessionUpdate) {
     case "agent_message_chunk":
       return { event: "messageChunk", text: u.content?.text ?? "" };
+    case "user_message_chunk":
+      return { event: "userMessageChunk", text: u.content?.text ?? "" };
     case "agent_thought_chunk":
       return { event: "thoughtChunk", text: u.content?.text ?? "" };
     case "tool_call":

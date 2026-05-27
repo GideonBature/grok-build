@@ -317,6 +317,7 @@ export class AcpClient extends EventEmitter {
       return;
     }
     if (r.event === "messageChunk") this.emit("messageChunk", r.text);
+    else if (r.event === "userMessageChunk") this.emit("userMessageChunk", r.text);
     else if (r.event === "thoughtChunk") this.emit("thoughtChunk", r.text);
     else if (r.event === "toolCall") this.emit("toolCall", r.payload);
     else if (r.event === "toolCallUpdate") this.emit("toolCallUpdate", r.payload);

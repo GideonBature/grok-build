@@ -42,6 +42,8 @@
     busy: false,
     activeAgentEl: null,
     activeAgentRaw: "",
+    activeUserEl: null,
+    activeUserRaw: "",
     activeThoughtEl: null,
     activeThoughtHdrEl: null,
     thoughtStartTime: null,
@@ -56,6 +58,7 @@
     activeSessionId: null,
     sessionSearch: "",
     renamingSessionId: null,
+    replaying: false,
   };
 
   // ---------- icons ----------
@@ -86,7 +89,7 @@
     agent: {
       icon: ICON.bot,
       label: "Agent mode",
-      desc: "Grok will ask for approval before making each change",
+      desc: "Grok acts directly, asking approval only for changes it judges sensitive",
     },
     plan: {
       icon: ICON.listTree,
@@ -152,17 +155,34 @@
 
   const { looksLikeFileRef, formatRelativeTime } = globalThis.GrokWebviewHelpers;
 
+  function renderDiffCode(code) {
+    const lines = code.replace(/\n+$/, "").split("\n");
+    const body = lines.map((ln) => {
+      let cls = "diff-line";
+      if (/^@@/.test(ln)) cls += " diff-hunk";
+      else if (/^(\+\+\+|---|diff |index )/.test(ln)) cls += " diff-meta";
+      else if (ln[0] === "+") cls += " diff-add";
+      else if (ln[0] === "-") cls += " diff-del";
+      return `<span class="${cls}">${escapeHtml(ln) || "&nbsp;"}</span>`;
+    }).join("");
+    return `<code class="diff-code">${body}</code>`;
+  }
+
   function renderMarkdown(raw) {
     const codeBlocks = [];
-    let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, _lang, code) => {
+    let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
       const i = codeBlocks.length;
+      const isDiff = lang === "diff";
+      const inner = isDiff
+        ? renderDiffCode(code)
+        : `<code>${escapeHtml(code).trimEnd()}</code>`;
       codeBlocks.push(
-        `<div class="code-block">` +
+        `<div class="code-block${isDiff ? " diff" : ""}">` +
           `<button class="code-copy-btn" type="button" title="Copy code">` +
             `<span class="code-copy-glyph">${ICON.copy}</span>` +
             `<span class="code-copy-label">Copy code</span>` +
           `</button>` +
-          `<pre><code>${escapeHtml(code).trimEnd()}</code></pre>` +
+          `<pre>${inner}</pre>` +
         `</div>`
       );
       return `\x00B${i}\x00`;
@@ -624,12 +644,6 @@
         name.className = "history-row-name";
         name.textContent = s.displayName || "Untitled";
         name.title = s.rawSummary || s.displayName || "";
-        name.onclick = (e) => {
-          e.stopPropagation();
-          if (active) { closePopovers(); return; }
-          vscode.postMessage({ type: "resumeSession", id: s.id });
-          closePopovers();
-        };
         main.appendChild(name);
 
         const meta = document.createElement("div");
@@ -639,6 +653,14 @@
         parts.push(formatRelativeTime(s.updatedAt));
         meta.textContent = parts.join(" · ");
         main.appendChild(meta);
+
+        // Whole row is the click target; the rename/delete buttons below
+        // stopPropagation so they don't also trigger a resume.
+        row.onclick = () => {
+          if (active) { closePopovers(); return; }
+          vscode.postMessage({ type: "resumeSession", id: s.id });
+          closePopovers();
+        };
       }
 
       row.appendChild(main);
@@ -660,9 +682,7 @@
       delBtn.title = "Delete";
       delBtn.onclick = (e) => {
         e.stopPropagation();
-        if (confirm(`Delete session "${s.displayName}"? This cannot be undone.`)) {
-          vscode.postMessage({ type: "deleteSession", id: s.id });
-        }
+        vscode.postMessage({ type: "deleteSession", id: s.id, name: s.displayName });
       };
       actions.appendChild(renameBtn);
       actions.appendChild(delBtn);
@@ -703,8 +723,6 @@
       welcome.hidden = false;
       const onb = $("welcome-onboarding");
       if (onb) onb.innerHTML = "";
-      const tips = $("welcome-tips");
-      if (tips) tips.hidden = false;
       const ver = $("welcome-version");
       if (ver) ver.textContent = "starting...";
     }
@@ -712,10 +730,13 @@
     state.pendingDiffByToolCallId.clear();
     state.activeAgentEl = null;
     state.activeAgentRaw = "";
+    state.activeUserEl = null;
+    state.activeUserRaw = "";
     state.activeThoughtEl = null;
     state.activeThoughtHdrEl = null;
     state.thoughtBuffer = "";
     state.activeToolGroupEl = null;
+    state.replaying = false;
   }
 
   function showOnboarding(mode, info) {
@@ -723,34 +744,25 @@
     const welcome = $("welcome");
     if (welcome) welcome.hidden = false;
     state.welcomeVisible = true;
-    const tips = $("welcome-tips");
     const onb = $("welcome-onboarding");
     const ver = $("welcome-version");
     if (!onb) return;
     if (mode === "missing-cli") {
-      if (tips) tips.hidden = true;
-      if (info.platform === "win32") {
-        if (ver) ver.textContent = "Windows not supported";
-        onb.innerHTML =
-          `<div class="onb">` +
-            `<p class="onb-heading">Windows isn&rsquo;t supported</p>` +
-            `<p class="onb-desc">The Grok CLI has no Windows build, so this extension can&rsquo;t run natively here. See the <a href="https://github.com/phuryn/grok-build-vscode#readme" class="onb-link">README</a> for the WSL workaround.</p>` +
-          `</div>`;
-      } else {
-        if (ver) ver.textContent = "CLI not installed";
-        onb.innerHTML =
-          `<div class="onb">` +
-            `<p class="onb-heading">Install the Grok CLI</p>` +
-            `<div class="onb-cmd">` +
-              `<code>curl -fsSL https://x.ai/cli/install.sh | bash</code>` +
-              `<button class="onb-copy" type="button" title="Copy" data-cmd="curl -fsSL https://x.ai/cli/install.sh | bash">${ICON.copy}</button>` +
-            `</div>` +
-            `<button class="onb-action" type="button" data-act="runInstall">Open terminal &amp; run</button>` +
-            `<button class="onb-action onb-secondary" type="button" data-act="recheck">Re-check connection</button>` +
-          `</div>`;
-      }
+      if (ver) ver.textContent = "CLI not installed";
+      const installCmd = info.platform === "win32"
+        ? "irm https://x.ai/cli/install.ps1 | iex"
+        : "curl -fsSL https://x.ai/cli/install.sh | bash";
+      onb.innerHTML =
+        `<div class="onb">` +
+          `<p class="onb-heading">Install the Grok CLI</p>` +
+          `<div class="onb-cmd">` +
+            `<code>${installCmd}</code>` +
+            `<button class="onb-copy" type="button" title="Copy" data-cmd="${installCmd}">${ICON.copy}</button>` +
+          `</div>` +
+          `<button class="onb-action" type="button" data-act="runInstall">Open terminal &amp; run</button>` +
+          `<button class="onb-action onb-secondary" type="button" data-act="recheck">Re-check connection</button>` +
+        `</div>`;
     } else if (mode === "auth-required") {
-      if (tips) tips.hidden = true;
       if (ver) ver.textContent = "Authentication required";
       onb.innerHTML =
         `<div class="onb">` +
@@ -766,7 +778,6 @@
           `<button class="onb-action onb-secondary" type="button" data-act="recheck">Re-check connection</button>` +
         `</div>`;
     } else {
-      if (tips) tips.hidden = false;
       onb.innerHTML = "";
     }
   }
@@ -1028,21 +1039,47 @@
     scrollToBottom();
   }
 
-  function appendThought(_text) {
+  function appendThought(text) {
+    state.activeUserEl = null;
     clearWelcome();
-    if (state.activeThoughtHdrEl) return;
-    if (!state.thoughtStartTime) state.thoughtStartTime = Date.now();
-    const el = document.createElement("div");
-    el.className = "msg thinking";
-    const hdr = document.createElement("div");
-    hdr.className = "thinking-header";
-    hdr.innerHTML = `<span class="thinking-label">Thinking...</span>`;
-    el.appendChild(hdr);
-    messagesEl.appendChild(el);
-    state.activeThoughtHdrEl = hdr;
+    if (!state.activeThoughtEl) {
+      if (!state.thoughtStartTime) state.thoughtStartTime = Date.now();
+      state.thoughtBuffer = "";
+      const el = document.createElement("div");
+      el.className = "msg thinking";
+      const hdr = document.createElement("div");
+      hdr.className = "thinking-header";
+      hdr.innerHTML = `<span class="thinking-chevron">▶</span><span class="thinking-label">Thinking...</span>`;
+      const body = document.createElement("div");
+      body.className = "thinking-body";
+      body.hidden = true;
+      hdr.onclick = () => {
+        const open = body.hidden;
+        body.hidden = !open;
+        hdr.querySelector(".thinking-chevron").textContent = open ? "▼" : "▶";
+      };
+      el.appendChild(hdr);
+      el.appendChild(body);
+      messagesEl.appendChild(el);
+      state.activeThoughtEl = body;
+      state.activeThoughtHdrEl = hdr;
+    }
+    state.thoughtBuffer += text;
+    if (!state.thoughtRenderScheduled) {
+      state.thoughtRenderScheduled = true;
+      requestAnimationFrame(flushThought);
+    }
+  }
+
+  function flushThought() {
+    state.thoughtRenderScheduled = false;
+    if (!state.activeThoughtEl) return;
+    state.activeThoughtEl.textContent = state.thoughtBuffer;
+    scrollToBottom();
   }
 
   function appendAgent(text) {
+    state.activeUserEl = null;
     closeToolGroup();
     clearWelcome();
     if (!state.activeAgentEl) {
@@ -1062,6 +1099,44 @@
     state.activeAgentEl.innerHTML = renderMarkdown(state.activeAgentRaw);
     const wrapper = state.activeAgentEl.parentElement;
     if (wrapper) wrapper._copyText = state.activeAgentRaw;
+    scrollToBottom();
+  }
+
+  // Finalize the current agent turn (flush buffers, stamp the "Thought for Ns"
+  // label, close any open tool group) and clear the active-element handles so
+  // the next chunk starts a fresh bubble. Used on promptComplete and at the
+  // user-message boundary while replaying a loaded session.
+  function commitAgentTurn() {
+    flushAgent();
+    flushThought();
+    if (state.thoughtStartTime && state.activeThoughtHdrEl) {
+      const label = state.activeThoughtHdrEl.querySelector(".thinking-label");
+      // Replayed turns have no real elapsed time, so drop the seconds.
+      if (label) label.textContent = state.replaying
+        ? "Thought"
+        : `Thought for ${Math.round((Date.now() - state.thoughtStartTime) / 1000)}s`;
+      state.thoughtStartTime = null;
+    }
+    closeToolGroup();
+    state.activeAgentEl = null;
+    state.activeAgentRaw = "";
+    state.activeThoughtEl = null;
+    state.activeThoughtHdrEl = null;
+  }
+
+  // Replayed user prompts (session/load) arrive as user_message_chunk updates.
+  // Commit any in-flight agent turn first, then accumulate into one user bubble.
+  function appendUserChunk(text) {
+    if (state.activeAgentEl || state.activeThoughtEl || state.activeToolGroupEl) {
+      commitAgentTurn();
+    }
+    clearWelcome();
+    if (!state.activeUserEl) {
+      state.activeUserEl = addMessage("user", "");
+      state.activeUserRaw = "";
+    }
+    state.activeUserRaw += text;
+    state.activeUserEl.innerHTML = renderMarkdown(state.activeUserRaw);
     scrollToBottom();
   }
 
@@ -1275,8 +1350,6 @@
         const ver = msg.info.version ? ` · v${msg.info.version}` : "";
         const verEl = $("welcome-version");
         if (verEl) verEl.textContent = `connected${ver}`;
-        const tips = $("welcome-tips");
-        if (tips) tips.hidden = false;
         const onb = $("welcome-onboarding");
         if (onb) onb.innerHTML = "";
         break;
@@ -1317,6 +1390,17 @@
       case "messageChunk":
         appendAgent(msg.text);
         break;
+      case "userMessageChunk":
+        appendUserChunk(msg.text);
+        break;
+      case "historyReplay":
+        if (msg.active) {
+          state.replaying = true;
+        } else {
+          commitAgentTurn(); // finalize the last turn while still flagged as replay
+          state.replaying = false;
+        }
+        break;
       case "toolCall":
         addToToolGroup(msg.call);
         break;
@@ -1342,21 +1426,10 @@
         addPlanCard(msg.req);
         break;
       case "promptComplete":
-        flushAgent();
-        if (state.thoughtStartTime && state.activeThoughtHdrEl) {
-          const secs = Math.round((Date.now() - state.thoughtStartTime) / 1000);
-          const label = state.activeThoughtHdrEl.querySelector(".thinking-label");
-          if (label) label.textContent = `Thought for ${secs}s`;
-          state.thoughtStartTime = null;
-        }
-        closeToolGroup();
+        commitAgentTurn();
         if (msg.meta?.totalTokens) updateDonut(msg.meta.totalTokens);
         state.busy = false;
         sendBtn.disabled = false;
-        state.activeAgentEl = null;
-        state.activeAgentRaw = "";
-        state.activeThoughtEl = null;
-        state.activeThoughtHdrEl = null;
         break;
       case "agentError":
         addError(msg.text);
@@ -1425,7 +1498,9 @@
       e.preventDefault();
       e.stopPropagation();
       const codeEl = copyBtn.parentElement && copyBtn.parentElement.querySelector("pre code");
-      const text = codeEl ? codeEl.textContent : "";
+      // innerText (not textContent) so diff blocks, whose lines are block-level
+      // spans with no literal newlines, still copy as one line per row.
+      const text = codeEl ? codeEl.innerText : "";
       navigator.clipboard.writeText(text).then(() => {
         const label = copyBtn.querySelector(".code-copy-label");
         const glyph = copyBtn.querySelector(".code-copy-glyph");

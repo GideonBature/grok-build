@@ -7,9 +7,7 @@ A thin VS Code sidebar client for xAI's Grok Build CLI. It spawns `grok agent st
 Works with SuperGrok Heavy subscription or xAI API key (standard Grok). 
 **Not affiliated with xAI.**
 
-![Welcome screen and mode picker](docs/screenshots/start.png)
-
-![Long user messages collapse with Show more / Show less](docs/screenshots/showmore.png)
+![Grok Build in the VS Code sidebar](docs/screenshots/v1.1.0_intro.png)
 
 ---
 
@@ -20,7 +18,7 @@ Works with SuperGrok Heavy subscription or xAI API key (standard Grok).
 - **Permission cards** with **Allow always / Allow once / Reject** instead of `[y/N]` terminal prompts
 - **Session history** — clock icon in the top bar lists past sessions (saved by the CLI in `~/.grok/sessions/`); resume, rename, or delete any of them
 - **Upload from computer** — `+` button in the bottom toolbar opens a file picker; picked files are added as `@path` chips (no contents injected)
-- **Webview-native streaming** — a single "Thinking..." line that resolves to "Thought for *N*s" (reasoning traces are hidden by design, not collapsed), grouped tool-call rows
+- **Webview-native streaming** — a "Thinking..." line that resolves to "Thought for *N*s"; click it to expand the full reasoning trace, plus grouped tool-call rows
 - **Slash autocomplete sourced live from the CLI** via `available_commands_update` — reflects exactly what your installed version supports
 - **YOLO mode toggled in-process** — no CLI restart, the session is untouched
 - **Side-by-side with other AI tools** — drag the icon to the secondary side bar to sit next to Copilot Chat / Claude Code
@@ -31,12 +29,25 @@ Trade-off: this is a UI shell, not a replacement. Install the `grok` CLI first; 
 
 ## Quick start
 
-> **Platforms:** macOS and Linux. The `grok` CLI has no Windows build — on Windows, use WSL2 + VS Code Remote-WSL and install everything on the WSL side.
+> **Platforms:** macOS, Linux, and Windows. The `grok` CLI now ships a native Windows build, so the extension runs natively on all three — no WSL required. (WSL2 + Remote-WSL still works fine if you prefer it.)
 
-**1. Install and sign in to the CLI:**
+**1. Install the CLI.**
+
+macOS / Linux / WSL:
 
 ```bash
 curl -fsSL https://x.ai/cli/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://x.ai/cli/install.ps1 | iex
+```
+
+**Then sign in:**
+
+```bash
 grok /login
 ```
 
@@ -56,7 +67,7 @@ Or build from source:
 git clone https://github.com/phuryn/grok-build-vscode.git
 cd grok-build-vscode
 npm install
-./scripts/install.sh
+./scripts/install.sh        # Windows: pwsh scripts\install.ps1
 ```
 
 Reload VS Code (**Ctrl+Shift+P → Developer: Reload Window**) and click the Grok icon in the activity bar.
@@ -65,7 +76,7 @@ Reload VS Code (**Ctrl+Shift+P → Developer: Reload Window**) and click the Gro
 >
 > ![Right-click the Grok icon → Move To → Secondary Side Bar](docs/screenshots/side.png)
 
-**Uninstall:** `./scripts/uninstall.sh` or `code --uninstall-extension PawelHuryn.grok-vscode-phuryn`.
+**Uninstall:** `./scripts/uninstall.sh` (Windows: `pwsh scripts\uninstall.ps1`) or `code --uninstall-extension PawelHuryn.grok-vscode-phuryn`.
 
 ---
 
@@ -90,8 +101,8 @@ Restarting the session (the **+** button) kills the CLI child and spawns a fresh
 
 | Mode | Behaviour |
 |---|---|
-| **Agent** (default) | CLI asks for permission before each write or shell action — a card appears in chat |
-| **YOLO** | Extension auto-responds "allow always" to every `session/request_permission`. The CLI process and its session are untouched, no restart |
+| **Agent** (default) | CLI acts directly and **may** ask for permission on a write or shell action it judges sensitive — when it does, a card appears in chat |
+| **YOLO** | Extension auto-responds "allow always" to any `session/request_permission` the CLI raises. The CLI process and its session are untouched, no restart |
 | **Plan** | ⚠️ Currently disabled — see [Known limits](#known-limits) |
 
 ### File chips
@@ -149,7 +160,7 @@ When the panel opens (or you click **+** for a new session):
 ### Design choices worth knowing
 
 - **Pure modules split for testability.** `acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-locator`, `sessions`, `webview-helpers` have no `vscode` import, no spawn, no network — they run under Vitest in a Node process. 94 tests in under two seconds.
-- **YOLO is client-side only.** It's a single `autoApprove` flag in [src/sidebar.ts](src/sidebar.ts) — toggling Agent ↔ YOLO doesn't restart the CLI or even send a message. The CLI keeps asking; the extension just answers "allow always" automatically.
+- **YOLO is client-side only.** It's a single `autoApprove` flag in [src/sidebar.ts](src/sidebar.ts) — toggling Agent ↔ YOLO doesn't restart the CLI or even send a message. Whenever the CLI does raise a permission request, the extension just answers "allow always" automatically.
 - **Cross-platform without per-OS branches.** [src/terminal-manager.ts](src/terminal-manager.ts) uses `spawn(cmd, { shell: true })` so Node picks `cmd.exe` or `/bin/sh`. [src/cli-locator.ts](src/cli-locator.ts) prefers `HOME`/`USERPROFILE` env over `os.homedir()` so tests can override paths.
 - **Streaming is rAF-coalesced.** `agent_message_chunk` and `agent_thought_chunk` buffer into a raw string and re-render at most once per animation frame — keeps long responses smooth even under fast chunk rates.
 - **`available_commands_update` drives slash autocomplete.** No hardcoded command list; the CLI tells the extension what's available, so plugin/skill installs surface immediately.
@@ -160,7 +171,7 @@ When the panel opens (or you click **+** for a new session):
 
 ### Sending a prompt
 
-Type in the composer and press **Enter** (or **Ctrl/Cmd+Enter** if `grok.useCtrlEnterToSend` is on). The agent streams its response; while it reasons, a single "Thinking..." line shows, which resolves to "Thought for *N*s" on completion. (Reasoning traces themselves are hidden — only the timing line surfaces.)
+Type in the composer and press **Enter** (or **Ctrl/Cmd+Enter** if `grok.useCtrlEnterToSend` is on). The agent streams its response; while it reasons, a "Thinking..." line shows, which resolves to "Thought for *N*s" on completion. Click the line to expand or collapse the full reasoning trace (collapsed by default).
 
 ### Slash commands
 
@@ -203,11 +214,7 @@ grok mcp add playwright --command npx --args @playwright/mcp@latest
 
 Or edit the config files directly via gear → *Open global config* / *Open project config*. Click the new-session button in the sidebar to reload.
 
-![Agent responses render with full markdown — headings, lists, tables, fenced code](docs/screenshots/markdown.png)
-
-![Hover any message to copy it or see the timestamp](docs/screenshots/copymessage.png)
-
-![YOLO mode active with slash command autocomplete](docs/screenshots/yolo.png)
+![Markdown rendering, message actions, and YOLO mode with slash-command autocomplete](docs/screenshots/v1.1.0_more.png)
 
 ---
 
@@ -281,7 +288,7 @@ See [TESTS.md](TESTS.md) for the full breakdown of what's covered vs deferred to
 
 ## Known limits
 
-- **Plan mode disabled.** The `x.ai/exit_plan_mode` ACP response path in the current CLI version treats any client response — result or error — as approval. Enabling the UI without working Reject/Abandon would silently approve every plan. Will be re-enabled once the CLI wires up the rejection code path.
+- **Plan mode disabled.** The `x.ai/exit_plan_mode` ACP response path treats any client response — result or error — as approval. Enabling the UI without working Reject/Abandon would silently approve every plan. Will be re-enabled once the CLI wires up the rejection code path. *Re-verified against `grok` 0.2.3 (2026-05-27): rejecting the plan with a JSON-RPC error still let the agent exit plan mode and execute the full plan.*
 - **Diff preview semantics.** The diff editor compares the proposed old and new text against each other, not against the file on disk at the moment of preview. The actual write happens via `fs/write_text_file` after approval. This is an ACP design constraint — `tool_call_update` carries the diff before the file is touched.
 - **No subagent inspector.** Subagent messages render inline as tool cards rather than in a dedicated panel.
 - **No worktree UI.** `Grok: New Worktree Session` is planned but not yet implemented.

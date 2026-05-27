@@ -4,7 +4,7 @@ VS Code sidebar extension for **xAI's Grok Build CLI**, driven by `grok agent st
 
 ## Status
 
-v1.0.3 (published on the VS Code Marketplace). 94 unit tests passing. Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL.
+v1.1.0 (local; 1.0.3 is the latest published on the VS Code Marketplace). 94 unit tests passing. Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL, and against the **native Windows build** `grok` 0.2.3 (`irm https://x.ai/cli/install.ps1 | iex`) — `cli-locator` resolves `grok.cmd`/`grok.exe` and `terminal-manager` uses `shell:true`. The native-Windows smoke test surfaced a handful of webview regressions (history popover that never closed, session rows only clickable on the label, reasoning traces no longer expandable, a cluttered welcome screen), all fixed in this build.
 
 ## Module map
 
@@ -32,14 +32,14 @@ Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-lo
 ```bash
 npm install
 npm test         # 94 tests, <2s, vitest
-npm run package  # → grok-vscode-phuryn-1.0.3.vsix
+npm run package  # → grok-vscode-phuryn-1.1.0.vsix
 ```
 
 ## Install
 
 - **macOS / Linux / WSL Ubuntu:** `./scripts/install.sh`
-- **Windows (UI only, no working chat — grok CLI is Linux/macOS):** `pwsh scripts\install.ps1`
-- **Windows for real:** WSL2 Ubuntu + Remote-WSL → install in the WSL-side VS Code server
+- **Windows (native):** `pwsh scripts\install.ps1` — runs the native Windows `grok` CLI directly
+- **WSL Ubuntu (alternative):** Remote-WSL → install in the WSL-side VS Code server
 
 See `README.md § Install` for the full per-platform matrix.
 
@@ -50,7 +50,7 @@ See `README.md § Install` for the full per-platform matrix.
 - Sessions: list/resume via `session/load` (grok stores them at `~/.grok/sessions/<urlencoded-cwd>/<id>/`); rename/delete metadata in `context.globalState["grok.sessionMeta"]`. We never edit grok's own session files.
 - Handlers (mandatory or the agent crashes): `fs/read_text_file`, `fs/write_text_file`, `terminal/{create,output,wait_for_exit,kill,release}`
 - `session/request_permission` → chat card with `allow-always` / `allow-once` / `reject-once`, diff editor preview for `kind:"edit"`
-- `session/set_mode` wired but Plan is UI-disabled (the CLI's `x.ai/exit_plan_mode` treats any client response as approval — see Known limits). The mode picker exposes Agent and YOLO only.
+- `session/set_mode` wired but Plan is UI-disabled (the CLI's `x.ai/exit_plan_mode` treats any client response — result *or* error — as approval; re-verified broken in 0.2.3 — see Known limits). The mode picker exposes Agent and YOLO only.
 - `--reasoning-effort` flag at agent spawn (`low | medium | high | xhigh | max`)
 - `available_commands_update` → slash autocomplete
 - `current_mode_update` → bottom-toolbar mode button (the top bar was removed in 0.9.0)
@@ -67,7 +67,7 @@ See `README.md § Install` for the full per-platform matrix.
 
 - `terminal-manager.ts` uses `spawn(cmd, { shell: true })` so Node picks `cmd.exe` on Windows, `/bin/sh` elsewhere. Don't hardcode shell paths.
 - `cli-locator.ts` reads `HOME` / `USERPROFILE` env vars first (testability), falls back to `os.homedir()`. Uses `where` on Windows, `command -v` elsewhere. Checks `.cmd`/`.exe`/`.bat` extensions on Windows.
-- Tests use `node -e "..."` everywhere so commands are deterministic across platforms — don't add `pwd`, `awk`, `sleep`, `true`, etc.
+- Tests use `node -e "..."` everywhere, so commands are deterministic across platforms — don't add `pwd`, `awk`, `sleep`, `true`, etc.
 
 ## What's next (priority order)
 
