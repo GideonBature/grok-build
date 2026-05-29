@@ -10,6 +10,10 @@
 
 - **`grok.defaultEffort` no longer crashes startup.** The setting is still saved, but it's no longer forwarded as `--reasoning-effort` to `grok agent stdio` — current `grok-build` ACP sessions reject `reasoningEffort`, so forwarding it made the CLI exit with code 2 (e.g. after choosing Max). A pure `buildGrokAgentArgs()` helper + a fake-CLI startup regression test guard it. (#3, #4, thanks @shugav)
 
+### Plan review
+
+- **Open a plan as a Markdown editor tab.** Live and restored plan cards now show a link that opens the plan text in a normal VS Code editor (an extension-owned snapshot — deliberately *not* grok's CLI-owned `.grok/sessions/.../plan.md`). Opening it doesn't send a verdict, disable the approval controls, or clear typed feedback. Better for reviewing long plans. (#7, #8, thanks @shugav)
+
 ## 1.2.1 — 2026-05-29
 
 Robustness fixes from a static audit (cross-checked with Codex). The high-impact ones are in the child-process supervision layer; a few low-impact correctness/perf cleanups ride along. Findings judged overstated or cosmetic (e.g. the non-`file://` URI drop) were left as-is.

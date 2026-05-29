@@ -16,6 +16,7 @@ import { buildPrompt } from "./prompt-builder";
 import { parseFileRef, shouldReadFileInline } from "./file-ref";
 import { pickRejectOption, shouldRejectPermission } from "./plan-gate";
 import { appendPlanEntry, decideRestoreState } from "./plan-restore";
+import { planReviewFileBaseName, sanitizePlanReviewFilePart } from "./plan-review";
 import { GROK_PRIMER } from "./grok-primer";
 import {
   SessionListEntry,
@@ -681,12 +682,7 @@ See design doc for the full state machine diagram.`;
     });
     client.on("exitPlanRequest", (req: ExitPlanRequest) => {
       if (gen !== this.sessionGen) return;
-      const plan = req.plan || this.lastPlanText;
-      // Hold onto the plan text until the user picks a verdict so persistPlanVerdict
-      // can save it. Cleared (via resolved/pending) so the next plan starts fresh.
-      this.pendingPlanText = plan;
-      this.lastPlanText = "";
-      this.post({ type: "exitPlanRequest", req: { ...req, plan } });
+      void this.postExitPlanRequest(req, gen);
     });
     client.on("exit", (code) => {
       if (gen !== this.sessionGen) return; // suppress exit events from disposed/replaced clients
@@ -705,7 +701,7 @@ See design doc for the full state machine diagram.`;
         const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
         const saved = overrides[resumeId]?.plans ?? [];
         if (saved.length > 0) {
-          this.post({ type: "planHistoryQueue", plans: saved });
+          this.post({ type: "planHistoryQueue", plans: await this.withPlanReviewPaths(saved, resumeId) });
           this.lastPlanText = saved[saved.length - 1].text;
         } else {
           // Legacy session (no per-plan persistence): fall back to the on-disk
@@ -714,7 +710,21 @@ See design doc for the full state machine diagram.`;
           if (fs.existsSync(planPath)) {
             try {
               const planText = fs.readFileSync(planPath, "utf8");
-              this.post({ type: "planHistoryQueue", plans: [{ text: planText, verdict: undefined as any }] });
+              let snapshot: { path: string; name: string } | undefined;
+              try {
+                snapshot = await this.createPlanReviewSnapshot(planText, resumeId);
+              } catch (e) {
+                this.output.appendLine(`[plan-review] ${(e as Error).message}`);
+              }
+              this.post({
+                type: "planHistoryQueue",
+                plans: [{
+                  text: planText,
+                  verdict: undefined as any,
+                  planPath: snapshot?.path,
+                  planName: snapshot?.name,
+                }],
+              });
               this.lastPlanText = planText;
             } catch (e) {
               this.output.appendLine(`[plan-restore] ${(e as Error).message}`);
@@ -1024,6 +1034,69 @@ See design doc for the full state machine diagram.`;
     );
     // (tmp/after refs intentionally unused — we use openTextDocument's auto URIs)
     void tmp; void after;
+  }
+
+  private async postExitPlanRequest(req: ExitPlanRequest, gen: number): Promise<void> {
+    const plan = req.plan || this.lastPlanText;
+    let snapshot: { path: string; name: string } | undefined;
+    try {
+      snapshot = await this.createPlanReviewSnapshot(plan);
+    } catch (e) {
+      this.output.appendLine(`[plan-review] ${(e as Error).message}`);
+    }
+    if (gen !== this.sessionGen) return;
+    // Hold onto the plan text until the user picks a verdict so persistPlanVerdict
+    // can save it. Cleared (via resolved/pending) so the next plan starts fresh.
+    this.pendingPlanText = plan;
+    this.lastPlanText = "";
+    this.post({
+      type: "exitPlanRequest",
+      req: { ...req, plan, planPath: snapshot?.path, planName: snapshot?.name },
+    });
+  }
+
+  private async withPlanReviewPaths<T extends { text: string }>(
+    plans: T[],
+    sessionId?: string,
+  ): Promise<Array<T & { planPath?: string; planName?: string }>> {
+    const out: Array<T & { planPath?: string; planName?: string }> = [];
+    for (const plan of plans) {
+      try {
+        const snapshot = await this.createPlanReviewSnapshot(plan.text, sessionId);
+        out.push({ ...plan, planPath: snapshot.path, planName: snapshot.name });
+      } catch (e) {
+        this.output.appendLine(`[plan-review] ${(e as Error).message}`);
+        out.push(plan);
+      }
+    }
+    return out;
+  }
+
+  private async createPlanReviewSnapshot(plan: string, sessionId?: string): Promise<{ path: string; name: string }> {
+    const content = plan && plan.trim() ? plan : "(empty plan)\n";
+    const sessionPart = sanitizePlanReviewFilePart(
+      sessionId ?? this.activeSessionId ?? this.client?.sessionId ?? "session",
+    ).slice(0, 80);
+    const dir = vscode.Uri.joinPath(this.context.globalStorageUri, "plan-reviews", sessionPart);
+    await vscode.workspace.fs.createDirectory(dir);
+    const uri = await this.uniquePlanReviewUri(dir, `${planReviewFileBaseName(content)}.md`);
+    await vscode.workspace.fs.writeFile(uri, Buffer.from(content, "utf8"));
+    return { path: uri.fsPath, name: path.basename(uri.fsPath) };
+  }
+
+  private async uniquePlanReviewUri(dir: vscode.Uri, fileName: string): Promise<vscode.Uri> {
+    const ext = path.extname(fileName);
+    const stem = path.basename(fileName, ext);
+    for (let i = 0; i < 100; i += 1) {
+      const suffix = i === 0 ? "" : `-${i + 1}`;
+      const uri = vscode.Uri.joinPath(dir, `${stem}${suffix}${ext}`);
+      try {
+        await vscode.workspace.fs.stat(uri);
+      } catch {
+        return uri;
+      }
+    }
+    return vscode.Uri.joinPath(dir, `${stem}-${Date.now()}${ext}`);
   }
 
   private addDroppedFile(absPath: string, shiftHeld: boolean): void {

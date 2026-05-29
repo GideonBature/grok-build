@@ -1001,6 +1001,23 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   text-decoration: underline;
   text-align: left;
 }
+.plan-tools {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: -2px;
+}
+.plan-file-link {
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.plan-file-link code {
+  background: transparent;
+  padding: 0;
+}
+.plan-file-link:hover {
+  background: var(--vscode-list-hoverBackground);
+}
 .card .plan-body {
   margin: 0;
   font-size: 12px;

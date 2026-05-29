@@ -1274,7 +1274,7 @@
     if (!state.planHistoryQueue.length) return;
     state.planHistoryQueue = state.planHistoryQueue.filter((p) => {
       if (typeof p.afterUserMessage === "number" && p.afterUserMessage <= cutoff) {
-        addPlanHistoryCard(p.text, p.verdict);
+        addPlanHistoryCard(p.text, p.verdict, p.planPath, p.planName);
         return false;
       }
       return true;
@@ -1283,7 +1283,7 @@
 
   function flushPlanHistory() {
     if (!state.planHistoryQueue.length) return;
-    for (const p of state.planHistoryQueue) addPlanHistoryCard(p.text, p.verdict);
+    for (const p of state.planHistoryQueue) addPlanHistoryCard(p.text, p.verdict, p.planPath, p.planName);
     state.planHistoryQueue = [];
   }
 
@@ -1378,6 +1378,25 @@
     abandoned: "Cancelled",
   };
 
+  function pathBaseName(p) {
+    return String(p || "").split(/[\\/]/).filter(Boolean).pop() || "plan.md";
+  }
+
+  function addPlanFileLink(el, planPath, planName) {
+    if (!planPath) return;
+    const planTools = document.createElement("div");
+    planTools.className = "plan-tools";
+    const link = document.createElement("a");
+    link.className = "file-ref-link plan-file-link";
+    link.href = planPath;
+    link.title = planPath;
+    const code = document.createElement("code");
+    code.textContent = planName || pathBaseName(planPath);
+    link.appendChild(code);
+    planTools.appendChild(link);
+    el.appendChild(planTools);
+  }
+
   function addPlanCard(req) {
     clearWelcome();
     // Finalize any in-flight Thinking / agent / tool group so it doesn't sit
@@ -1396,9 +1415,12 @@
     sub.textContent = "Nothing has been written yet. Approve, reject with feedback, or cancel to leave plan mode.";
     el.appendChild(sub);
 
+    const planText = req.plan || "";
+    addPlanFileLink(el, req.planPath, req.planName);
+
     const body = document.createElement("div");
     body.className = "plan-body";
-    body.innerHTML = req.plan ? renderMarkdown(req.plan) : "(empty plan)";
+    body.innerHTML = planText ? renderMarkdown(planText) : "(empty plan)";
     el.appendChild(body);
 
     const feedback = document.createElement("textarea");
@@ -1447,7 +1469,7 @@
   // is long gone, so there's nothing to respond to — we just show the plan text
   // grok wrote during that session, recovered from ~/.grok/sessions/.../plan.md,
   // and the verdict the user gave it (persisted in globalState).
-  function addPlanHistoryCard(text, verdict) {
+  function addPlanHistoryCard(text, verdict, planPath, planName) {
     clearWelcome();
     const el = document.createElement("div");
     el.className = "card plan plan-history";
@@ -1463,6 +1485,8 @@
       ? `Restored from the previous session — you ${verdictLabel.toLowerCase()} this plan.`
       : "Restored from the previous session.";
     el.appendChild(sub);
+
+    addPlanFileLink(el, planPath, planName);
 
     const body = document.createElement("div");
     body.className = "plan-body";
@@ -1725,7 +1749,7 @@
         addPlanCard(msg.req);
         break;
       case "planHistory":
-        addPlanHistoryCard(msg.text, msg.verdict);
+        addPlanHistoryCard(msg.text, msg.verdict, msg.planPath, msg.planName);
         break;
       case "planNotice":
         addPlanNotice(msg.text);
@@ -1915,7 +1939,7 @@
     const href = a.getAttribute("href") || "";
     if (/^https?:\/\//i.test(href)) {
       vscode.postMessage({ type: "openUrl", url: href });
-    } else if (!/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+    } else if (/^[a-zA-Z]:[\\/]/.test(href) || href.startsWith("\\\\") || !/^[a-z][a-z0-9+.-]*:/i.test(href)) {
       vscode.postMessage({ type: "openFile", path: href });
     }
   });

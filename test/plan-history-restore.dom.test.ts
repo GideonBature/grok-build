@@ -17,7 +17,7 @@
 // content lost", "stuck in plan mode after Cancel restore" — would all show up
 // here if regressed.
 import { describe, it, expect } from "vitest";
-import { bootWebview, dispatch } from "./webview-harness";
+import { bootWebview, dispatch, click } from "./webview-harness";
 
 // All visible message children in DOM order, mapped to a compact label so
 // assertions read like a transcript instead of a DOM dump.
@@ -240,6 +240,40 @@ describe("plan-history queue (restore-flow rendering)", () => {
       "plan[Rejected]: first attempt",
       "plan[Rejected]: second attempt",
       "user: u2",
+    ]);
+  });
+
+  it("queued plan-history cards open the matching plan file link", () => {
+    const { window, posted, doc } = bootWebview();
+    plays(window, [
+      { type: "planHistoryQueue", plans: [
+        {
+          text: "first restored plan",
+          verdict: "rejected",
+          afterUserMessage: 0,
+          planPath: "/tmp/grok/first-plan.md",
+          planName: "first-plan.md",
+        },
+        {
+          text: "second restored plan",
+          verdict: "abandoned",
+          afterUserMessage: 0,
+          planPath: "/tmp/grok/second-plan.md",
+          planName: "second-plan.md",
+        },
+      ]},
+      { type: "userMessage", text: "continue", chips: [] },
+    ]);
+
+    const cards = [...doc.querySelectorAll(".card.plan.plan-history")] as HTMLElement[];
+    expect(cards[0].querySelector(".plan-file-link code")!.textContent).toBe("first-plan.md");
+    expect(cards[1].querySelector(".plan-file-link code")!.textContent).toBe("second-plan.md");
+    click(window, cards[0].querySelector(".plan-file-link")!);
+    click(window, cards[1].querySelector(".plan-file-link")!);
+
+    expect(posted).toEqual([
+      { type: "openFile", path: "/tmp/grok/first-plan.md" },
+      { type: "openFile", path: "/tmp/grok/second-plan.md" },
     ]);
   });
 

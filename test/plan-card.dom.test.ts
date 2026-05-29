@@ -19,14 +19,48 @@ import { bootWebview, dispatch, click } from "./webview-harness";
 describe("plan card (real chat.js in a DOM)", () => {
   it("renders a plan card with body, feedback textarea, and three action buttons", () => {
     const { window, doc } = bootWebview();
-    dispatch(window, { type: "exitPlanRequest", req: { id: 7, plan: "1. add subtract()\n2. add test" } });
+    dispatch(window, {
+      type: "exitPlanRequest",
+      req: {
+        id: 7,
+        plan: "1. add subtract()\n2. add test",
+        planPath: "/tmp/grok/plan2.md",
+        planName: "plan2.md",
+      },
+    });
 
     const card = doc.querySelector(".card.plan");
     expect(card).not.toBeNull();
     expect(card!.querySelector(".plan-body")!.textContent).toContain("add subtract()");
+    expect(card!.querySelector(".plan-file-link code")!.textContent).toBe("plan2.md");
     expect(card!.querySelector("textarea.plan-feedback")).not.toBeNull();
     const labels = [...card!.querySelectorAll(".card-actions button")].map((b) => b.textContent);
     expect(labels).toEqual(["Approve & implement", "Reject", "Cancel"]);
+  });
+
+  it("opens the live plan link without resolving the approval card", () => {
+    const plan = "# Plan\n\n- inspect\n- edit\n\n```ts\nconst x = 1;\n```";
+    const { window, posted, doc } = bootWebview();
+    dispatch(window, {
+      type: "exitPlanRequest",
+      req: { id: 8, plan, planPath: "/tmp/grok/plan2.md", planName: "plan2.md" },
+    });
+
+    const card = doc.querySelector(".card.plan")!;
+    const feedback = card.querySelector("textarea.plan-feedback") as HTMLTextAreaElement;
+    feedback.value = "  keep this comment  ";
+    const link = card.querySelector(".plan-file-link") as HTMLAnchorElement;
+    expect(link.title).toBe("/tmp/grok/plan2.md");
+    click(window, link);
+
+    expect(posted).toEqual([{ type: "openFile", path: "/tmp/grok/plan2.md" }]);
+    expect(card.classList.contains("resolved")).toBe(false);
+    expect(card.querySelector(".plan-verdict-label")).toBeNull();
+    const approve = [...card.querySelectorAll(".card-actions button")]
+      .find((b) => b.textContent === "Approve & implement") as HTMLButtonElement;
+    expect(approve.disabled).toBe(false);
+    expect(feedback.disabled).toBe(false);
+    expect(feedback.value).toBe("  keep this comment  ");
   });
 
   it("'Reject' with empty feedback sends verdict:rejected and NO comment key", () => {
@@ -141,15 +175,38 @@ describe("plan card (real chat.js in a DOM)", () => {
 
   it("renders a read-only plan-history card with the persisted verdict label", () => {
     const { window, doc } = bootWebview();
-    dispatch(window, { type: "planHistory", text: "# Restored plan\n- step 1", verdict: "rejected" });
+    dispatch(window, {
+      type: "planHistory",
+      text: "# Restored plan\n- step 1",
+      verdict: "rejected",
+      planPath: "/tmp/grok/restored-plan.md",
+      planName: "restored-plan.md",
+    });
 
     const cards = doc.querySelectorAll(".card.plan.plan-history");
     expect(cards).toHaveLength(1);
     const card = cards[0];
     expect(card.querySelector(".plan-body")!.textContent).toContain("step 1");
+    expect(card.querySelector(".plan-file-link code")!.textContent).toBe("restored-plan.md");
     expect(card.querySelector(".plan-verdict-label")!.textContent).toBe("Rejected");
     expect(card.querySelector(".card-actions")).toBeNull();
     expect(card.querySelector("textarea")).toBeNull();
+  });
+
+  it("opens a restored plan link", () => {
+    const { window, posted, doc } = bootWebview();
+    dispatch(window, {
+      type: "planHistory",
+      text: "# Restored plan\n- step 1",
+      verdict: "approved",
+      planPath: "/tmp/grok/restored-plan.md",
+      planName: "restored-plan.md",
+    });
+
+    const link = doc.querySelector(".card.plan.plan-history .plan-file-link") as HTMLAnchorElement;
+    click(window, link);
+
+    expect(posted).toEqual([{ type: "openFile", path: "/tmp/grok/restored-plan.md" }]);
   });
 
   it("renders a plan-notice for planNotice and the blocked-command/-write variants", () => {
