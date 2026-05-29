@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2 — TBD
+
+### Plan mode
+
+- **Plan-mode gate hardening.** Relative workspace write paths are now resolved against the workspace root before containment checks, and common mutating forms of otherwise read-only-looking commands (shell separators/newlines, command-executing heads like `env`/`awk`/`sed`, write/exec flags on `find`/`fd`/`sort`/`tree`, mutating Git forms, and `npm audit --fix`) are blocked before plan approval. Grok's own `.grok/sessions/.../plan.md` write stays allowed and snooped. (#5, #6, thanks @shugav)
+
 ## 1.2.1 — 2026-05-29
 
 Robustness fixes from a static audit (cross-checked with Codex). The high-impact ones are in the child-process supervision layer; a few low-impact correctness/perf cleanups ride along. Findings judged overstated or cosmetic (e.g. the non-`file://` URI drop) were left as-is.
@@ -28,7 +34,6 @@ Surfaced while smoke-testing the rebuilt extension:
 
 - New regression tests cover each fix, written to fail before the fix landed (TDD). Process layer: `writeLine` swallows a throwing/destroyed stdin and skips a non-writable pipe ([test/acp-integration.test.ts](test/acp-integration.test.ts)); `resolveExitCode` maps signals to `128 + signum` and passes real codes (incl. 0) through; a killed process surfaces a non-zero exit; `buildKillPlan` issues `taskkill /T /F` on Windows and `SIGTERM` on POSIX; truncating mid-character emits no `�` ([test/terminal-manager.test.ts](test/terminal-manager.test.ts)); a resolved `request()` leaves no armed timer ([test/acp.test.ts](test/acp.test.ts)). Pure path helpers: `parseFileRef` / `shouldReadFileInline` ([test/file-ref.test.ts](test/file-ref.test.ts)). Webview: marker stripping + marker-only suppression + position alignment on replay, the collapsed live verdict card, and delete hidden for the active session ([test/plan-history-restore.dom.test.ts](test/plan-history-restore.dom.test.ts), [test/plan-card.dom.test.ts](test/plan-card.dom.test.ts), [test/webview-ui.dom.test.ts](test/webview-ui.dom.test.ts)).
 - **Flaky CI fix.** `test/acp-integration.test.ts` shared one `stderr` array binding across tests, so a prior test's late stderr could bleed into the next (reliably failed `gate blocks fs/write` on Linux). Each test now captures into its own array, listeners are removed in `afterEach`, and the stderr assertion waits for its line (stderr lags the stdout response across pipes). Reproduced on Ubuntu via Docker before fixing.
-
 ## 1.2.0 — 2026-05-28
 
 ### Plan mode is now enabled

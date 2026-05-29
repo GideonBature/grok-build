@@ -87,6 +87,7 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     // Bind the listener to a per-test local array, not the shared `stderr`
     // variable — otherwise a prior test's still-alive client can push late
     // stderr into the current test's array (cross-test bleed, flaky on Linux).
+    // (@shugav fixed the same bleed independently in #6.)
     const captured: string[] = [];
     stderr = captured;
 
@@ -107,8 +108,9 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     // detect "was it called or blocked".
     client.fsRead = async (p) => fs.readFileSync(p, "utf8");
     client.fsWrite = async (p, content) => {
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, content, "utf8");
+      const target = path.isAbsolute(p) ? p : path.join(workspace, p);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content, "utf8");
     };
     let terminalCalls = 0;
     (client as any).terminal = {
@@ -179,6 +181,19 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     expect(fs.existsSync(path.join(workspace, "file.ts"))).toBe(false);
   });
 
+  it("gate: planActive=true blocks relative fs/write_text_file paths inside the workspace", async () => {
+    client.planActive = true;
+    const blocked = collect<{ kind: string; target: string }>(client, "mutationBlocked");
+
+    await client.prompt("SCENARIO_RELATIVE_WORKSPACE_WRITE");
+
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].kind).toBe("write");
+    expect(blocked[0].target).toBe("relative-file.ts");
+    expect(stderr.join("")).toMatch(/WRITE_RESPONSE.*"error"/);
+    expect(fs.existsSync(path.join(workspace, "relative-file.ts"))).toBe(false);
+  });
+
   it("gate: planActive=false allows fs/write_text_file inside the workspace", async () => {
     client.planActive = false;
     const blocked = collect<unknown>(client, "mutationBlocked");
@@ -199,6 +214,18 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     expect(blocked[0].kind).toBe("terminal");
     expect(blocked[0].target).toContain("rm");
     expect((client as any).__terminalCalls()).toBe(0); // handler was never reached
+  });
+
+  it("gate: planActive=true blocks terminal/create with mutating args on an otherwise read-only head", async () => {
+    client.planActive = true;
+    const blocked = collect<{ kind: string; target: string }>(client, "mutationBlocked");
+
+    await client.prompt("SCENARIO_MUTATING_READONLY_HEAD_TERMINAL");
+
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].kind).toBe("terminal");
+    expect(blocked[0].target).toContain("sed");
+    expect((client as any).__terminalCalls()).toBe(0);
   });
 
   it("gate: planActive=true allows terminal/create with a read-only command (ls)", async () => {

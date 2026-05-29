@@ -43,6 +43,10 @@ describe("isInsideWorkspace", () => {
     expect(isInsideWorkspace("C:\\proj-other\\a.ts", "C:\\proj")).toBe(false);
   });
 
+  it("does not treat an absolute UNC path as workspace-relative", () => {
+    expect(isInsideWorkspace("\\\\server\\share\\file.ts", "C:\\proj")).toBe(false);
+  });
+
   it("resolves .. traversal that escapes the workspace as outside", () => {
     expect(isInsideWorkspace("/work/../etc/passwd", "/work")).toBe(false);
     expect(isInsideWorkspace("/work/sub/../keep.ts", "/work")).toBe(true);
@@ -78,13 +82,19 @@ describe("shouldBlockWrite", () => {
   it("blocks a nested workspace file while planning", () => {
     expect(shouldBlockWrite("/home/u/proj/src/deep/nested/x.ts", active("/home/u/proj"))).toBe(true);
   });
+
+  it("blocks a relative workspace write while planning", () => {
+    expect(shouldBlockWrite("src/file.ts", active("/home/u/proj"))).toBe(true);
+  });
 });
 
 describe("isReadOnlyCommand", () => {
   it("allows common read-only exploration commands", () => {
     for (const c of ["ls -la", "git status", "git diff HEAD~1", "git log --oneline",
                      "grep -rn foo src", "rg pattern", "cat package.json", "find . -name *.ts",
-                     "npm ls", "pnpm outdated", "node --version", "git rev-parse HEAD"]) {
+                     "npm ls", "pnpm outdated", "node --version", "git rev-parse HEAD",
+                     "git branch -vv", "git remote -v", "git remote show origin",
+                     "git config --get user.name", "git tag --list", "git reflog show"]) {
       expect(isReadOnlyCommand(c), c).toBe(true);
     }
   });
@@ -97,11 +107,34 @@ describe("isReadOnlyCommand", () => {
     }
   });
 
+  it("blocks mutating forms of otherwise read-only command heads", () => {
+    for (const c of ["sed -i s/a/b/ src/file.ts", "sed -Ei s/a/b/ src/file.ts",
+                     "sed --in-place=.bak s/a/b/ src/file.ts",
+                     "find . -delete", "find . -fprint out.txt", "find . -fprintf out.txt %p",
+                     "fd -x touch src/pwned", "fd --exec-batch touch src/pwned",
+                     "sort -o out.txt input.txt", "tree -o tree.txt",
+                     "git diff --output=patch.diff", "git diff --ext-diff",
+                     "git config user.name x", "git branch newbranch",
+                     "git branch --unset-upstream", "git remote add origin example",
+                     "git remote set-url origin example", "git reflog expire --expire=now --all",
+                     "git tag -d v1.0.0", "npm audit --fix"]) {
+      expect(isReadOnlyCommand(c), c).toBe(false);
+    }
+  });
+
   it("blocks read-only heads when chaining/redirection is present", () => {
     expect(isReadOnlyCommand("git diff && rm -rf x")).toBe(false);
+    expect(isReadOnlyCommand("echo ok&touch src/pwned")).toBe(false);
+    expect(isReadOnlyCommand("ls\nrm -rf src")).toBe(false);
     expect(isReadOnlyCommand("cat secrets > out.txt")).toBe(false);
     expect(isReadOnlyCommand("ls | xargs rm")).toBe(false);
     expect(isReadOnlyCommand("echo $(rm x)")).toBe(false);
+  });
+
+  it("blocks read-only-looking commands that can execute arbitrary commands", () => {
+    expect(isReadOnlyCommand("env touch src/pwned")).toBe(false);
+    expect(isReadOnlyCommand("awk 'BEGIN { system(\"touch src/pwned\") }'")).toBe(false);
+    expect(isReadOnlyCommand("sed '1e touch src/pwned' file.ts")).toBe(false);
   });
 
   it("allows read-only PowerShell pipelines (the common plan-mode listing)", () => {

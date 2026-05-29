@@ -46,6 +46,20 @@ function canonical(p: string): { norm: string; windows: boolean } {
   return { norm: windows ? s.toLowerCase() : s, windows };
 }
 
+function isAbsolutePath(p: string): boolean {
+  const s = String(p || "").trim();
+  return /^[\\/]{2}\?[\\/]/.test(s) || /^[a-zA-Z]:[\\/]/.test(s) ||
+    s.startsWith("/") || s.startsWith("\\");
+}
+
+function canonicalTarget(target: string, root: string): { norm: string; windows: boolean } {
+  if (isAbsolutePath(target)) return canonical(target);
+  const r = canonical(root);
+  const t = canonical(target);
+  const norm = nodePath.posix.normalize(`${r.norm}/${t.norm}`);
+  return { norm: r.windows ? norm.toLowerCase() : norm, windows: r.windows };
+}
+
 /**
  * True if `target` resolves to `root` itself or somewhere beneath it. Used to
  * decide whether a write lands in the user's workspace (block) or outside it
@@ -53,7 +67,7 @@ function canonical(p: string): { norm: string; windows: boolean } {
  */
 export function isInsideWorkspace(target: string, root: string): boolean {
   if (!target || !root) return false;
-  const t = canonical(target).norm;
+  const t = canonicalTarget(target, root).norm;
   const r = canonical(root).norm;
   if (r === "/" ) return t === "/" || t.startsWith("/");
   return t === r || t.startsWith(r + "/");
@@ -73,15 +87,14 @@ export function isMutatingKind(kind: string | undefined): boolean {
 // allowed only when every pipeline stage is itself read-only. Script-block
 // braces `{ }` are blocked because an otherwise-safe cmdlet can host arbitrary
 // code in one (e.g. `Select-Object @{e={ Remove-Item x }}`).
-const UNSAFE_SHELL = /[>;`{}]|\$\(|&&|\|\||(^|\s)&(\s|$)|<\(/;
+const UNSAFE_SHELL = /[>&;`{}\r\n]|\$\(|\|\||<\(/;
 
 const READONLY_HEADS = new Set([
   // POSIX
   "ls", "dir", "pwd", "cd", "echo", "cat", "type", "head", "tail", "less", "more",
   "grep", "rg", "ag", "ack", "find", "fd", "tree", "wc", "stat", "file", "which",
   "where", "whereis", "basename", "dirname", "realpath", "readlink", "du", "df",
-  "env", "printenv", "date", "whoami", "hostname", "uname", "sort", "uniq", "cut",
-  "awk", "sed", // sed/awk are read-only without -i / redirection (blocked above)
+  "printenv", "date", "whoami", "hostname", "uname", "sort", "uniq", "cut",
   // PowerShell read-only cmdlets + aliases. Inspection/formatting only — anything
   // that writes (out-file, set-content, tee-object, export-*) or executes
   // (foreach-object, where-object, invoke-expression/iex, invoke-command, start-process)
@@ -94,32 +107,111 @@ const READONLY_HEADS = new Set([
 ]);
 
 const GIT_READONLY = new Set([
-  "status", "diff", "log", "show", "branch", "remote", "ls-files", "ls-tree",
-  "rev-parse", "blame", "describe", "shortlog", "config", "cat-file", "name-rev",
-  "whatchanged", "reflog", "tag", // bare `git tag` lists; `git tag <name>` is rare in planning and harmless to block via fallthrough? we allow list-only below
+  "status", "diff", "log", "show", "ls-files", "ls-tree",
+  "rev-parse", "blame", "describe", "shortlog", "cat-file", "name-rev",
+  "whatchanged",
 ]);
 
 const PKG_READONLY = new Set(["ls", "list", "view", "info", "outdated", "why", "show", "audit"]);
+
+const GIT_BRANCH_READONLY_FLAGS = new Set([
+  "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list",
+  "--show-current", "--merged", "--no-merged", "--contains", "--no-contains",
+  "--points-at", "--color", "--no-color", "--column", "--no-column",
+]);
+const GIT_BRANCH_READONLY_PREFIXES = ["--format=", "--sort=", "--color=", "--column="];
+
+const GIT_TAG_READONLY_FLAGS = new Set([
+  "-l", "--list", "-n", "--contains", "--no-contains", "--points-at",
+  "--merged", "--no-merged", "--color", "--no-color", "--column", "--no-column",
+]);
+const GIT_TAG_READONLY_PREFIXES = ["-n", "--format=", "--sort=", "--color=", "--column="];
+
+const GIT_WRITE_OUTPUT_OPTIONS = [
+  "--output=", "--output-directory=",
+];
+
+function hasToken(tokens: string[], ...blocked: string[]): boolean {
+  return tokens.some((t) => blocked.includes(t));
+}
+
+function hasTokenPrefix(tokens: string[], ...prefixes: string[]): boolean {
+  return tokens.some((t) => prefixes.some((p) => t.startsWith(p)));
+}
+
+function hasGitWriteOption(tokens: string[]): boolean {
+  return hasToken(tokens, "--output", "--output-directory", "--ext-diff") ||
+    hasTokenPrefix(tokens, ...GIT_WRITE_OUTPUT_OPTIONS);
+}
+
+function allReadOnlyOptionTokens(tokens: string[], exact: Set<string>, prefixes: string[]): boolean {
+  return tokens.every((t) => exact.has(t) || prefixes.some((p) => t.startsWith(p)));
+}
+
+function hasSedInPlace(tokens: string[]): boolean {
+  return tokens.some((t) => /^-[a-z]*i([a-z]|\b)/i.test(t) || t.startsWith("--in-place"));
+}
+
+function hasOutputOption(tokens: string[]): boolean {
+  return hasToken(tokens, "-o", "--output") || hasTokenPrefix(tokens, "--output=");
+}
+
+function isReadOnlyGit(tokens: string[]): boolean {
+  const sub = (tokens[1] || "").toLowerCase();
+  const args = tokens.slice(2).map((t) => t.toLowerCase());
+  if (hasGitWriteOption(args)) return false;
+  if (sub === "tag") return args.length === 0 ||
+    allReadOnlyOptionTokens(args, GIT_TAG_READONLY_FLAGS, GIT_TAG_READONLY_PREFIXES);
+  if (sub === "branch") return args.length === 0 ||
+    allReadOnlyOptionTokens(args, GIT_BRANCH_READONLY_FLAGS, GIT_BRANCH_READONLY_PREFIXES);
+  if (sub === "remote") {
+    if (args.length === 0 || allReadOnlyOptionTokens(args, new Set(["-v", "--verbose"]), [])) return true;
+    const action = args.find((a) => !a.startsWith("-"));
+    return action === "show" || action === "get-url";
+  }
+  if (sub === "reflog") {
+    if (args.length === 0) return true;
+    const action = args.find((a) => !a.startsWith("-")) || "show";
+    return action === "show";
+  }
+  if (sub === "config") {
+    if (args.length === 0) return false;
+    if (args.length === 1 && !args[0].startsWith("-")) return true;
+    return hasToken(args, "-l", "--list") ||
+      hasTokenPrefix(args, "--get", "--get-regexp", "--show-origin", "--show-scope");
+  }
+  return GIT_READONLY.has(sub);
+}
+
+function isReadOnlyPackageCommand(tokens: string[]): boolean {
+  const sub = (tokens[1] || "").toLowerCase();
+  const args = tokens.slice(2).map((t) => t.toLowerCase());
+  if (!PKG_READONLY.has(sub)) return false;
+  if (sub === "audit" && (hasToken(args, "fix") || hasTokenPrefix(args, "--fix"))) return false;
+  return true;
+}
 
 /** One pipeline stage: read-only iff its head token is a known read-only program. */
 function isReadOnlyStage(stage: string): boolean {
   const tokens = stage.trim().split(/\s+/);
   if (!tokens[0]) return false;
   const head = tokens[0].toLowerCase().replace(/\.(exe|cmd|bat)$/i, "");
+  const lowerTokens = tokens.map((t) => t.toLowerCase());
 
   if (head === "git") {
-    const sub = (tokens[1] || "").toLowerCase();
-    if (sub === "tag") return tokens.length === 2; // bare `git tag` lists; with args it may create
-    return GIT_READONLY.has(sub);
+    return isReadOnlyGit(lowerTokens);
   }
   if (head === "npm" || head === "pnpm" || head === "yarn" || head === "bun") {
-    const sub = (tokens[1] || "").toLowerCase();
-    return PKG_READONLY.has(sub);
+    return isReadOnlyPackageCommand(lowerTokens);
   }
   if (head === "node" || head === "python" || head === "python3" || head === "deno") {
     // Only allow trivially read-only invocations like `node --version`.
     return tokens.length >= 2 && /^(-v|--version|--help|-h)$/.test(tokens[1]);
   }
+  if (head === "sed" && hasSedInPlace(lowerTokens.slice(1))) return false;
+  if (head === "find" && hasToken(lowerTokens.slice(1), "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls")) return false;
+  if (head === "fd" && hasToken(lowerTokens.slice(1), "-x", "--exec", "--exec-batch")) return false;
+  if ((head === "sort" || head === "tree") && hasOutputOption(lowerTokens.slice(1))) return false;
   return READONLY_HEADS.has(head);
 }
 
