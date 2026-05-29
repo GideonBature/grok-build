@@ -17,6 +17,13 @@
 // whichever way the host replies to exit_plan_mode.
 
 const readline = require("readline");
+
+const argv = process.argv.slice(2);
+if (argv.join(" ") !== "agent stdio") {
+  process.stderr.write(`unexpected argv: ${JSON.stringify(argv)}\n`);
+  process.exit(2);
+}
+
 const rl = readline.createInterface({ input: process.stdin });
 
 let nextId = 1000;

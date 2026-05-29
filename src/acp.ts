@@ -91,6 +91,14 @@ export interface TerminalHandler {
 
 type Pending = { resolve: (v: any) => void; reject: (e: any) => void; timer?: ReturnType<typeof setTimeout> };
 
+export function buildGrokAgentArgs(_effort?: EffortLevel): string[] {
+  // Current grok-build ACP sessions reject reasoningEffort. Passing it after
+  // `agent` exits with code 2; passing it globally reaches the backend but is
+  // rejected by the model. Keep the user setting persisted, but start stdio
+  // sessions with the CLI default effort until the ACP path supports it.
+  return ["agent", "stdio"];
+}
+
 export class AcpClient extends EventEmitter {
   private proc?: ChildProcessWithoutNullStreams;
   private rl?: Interface;
@@ -122,11 +130,10 @@ export class AcpClient extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    const args: string[] = ["agent"];
+    const args = buildGrokAgentArgs(this.opts.effort);
     if (this.opts.effort) {
-      args.push("--reasoning-effort", this.opts.effort);
+      this.opts.log(`grok.defaultEffort=${this.opts.effort} is saved but not forwarded because grok-build ACP sessions currently reject reasoningEffort`);
     }
-    args.push("stdio");
 
     this.opts.log(`spawning ${this.opts.cliPath} ${args.join(" ")} (cwd=${this.opts.cwd})`);
     // Node 18+ refuses to spawn .cmd/.bat without `shell: true` on Windows

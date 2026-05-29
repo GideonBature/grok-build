@@ -2,7 +2,7 @@
 
 Two layers:
 
-1. **Grok-free automated tests** (Vitest) — pure-logic unit tests plus happy-dom DOM tests that drive the real `media/chat.js`, plus a fast TerminalManager suite that spawns real `/bin/sh` children. **178 tests, all passing in ~1.4s.** Listed below. **None of them spawn the `grok` binary**, so the whole suite runs in CI on a clean Ubuntu box (`.github/workflows/ci.yml` runs `npm ci && npm test && npm run package` and never installs grok).
+1. **Grok-free automated tests** (Vitest) — pure-logic unit tests plus happy-dom DOM tests that drive the real `media/chat.js`, plus a fast TerminalManager suite that spawns real `/bin/sh` children. **186 tests, all passing in ~1.4s.** Listed below. **None of them spawn the `grok` binary**, so the whole suite runs in CI on a clean Ubuntu box (`.github/workflows/ci.yml` runs `npm ci && npm test && npm run package` and never installs grok).
 2. **VS Code integration tests** (deferred to v0.2 with `@vscode/test-electron`) — covers command registration, view lifecycle, settings reads, and the diff editor. Deferred because they require a headed VS Code, are slow, and the modules already cover the bug-prone surface.
 
 Separately, **grok-dependent probes** live as standalone scripts under `research/*.cjs`. They exercise the real CLI's ACP behavior (e.g. confirming `exit_plan_mode` treats any client reply as approval) and are run **manually** — Vitest's `include` glob is `test/**/*.test.ts`, so it never collects them. They're non-destructive (ACK writes without touching disk and run in a temp cwd) and require a `grok` binary on PATH; CI doesn't run them.
@@ -105,7 +105,7 @@ Shared between the shipped webview and the tests (`media/webview-helpers.js`).
 - File-ref detection: recognizes `@path` mentions and bare path-looking tokens, ignores prose
 - Relative-time formatting: "just now" / "Nm" / "Nh" / "Nd" buckets, singular/plural, far-future and far-past edges
 
-### `test/plan-card.dom.test.ts` — plan card in a real DOM (8 tests)
+### `test/plan-card.dom.test.ts` — plan card in a real DOM (10 tests)
 
 happy-dom test (see [Webview DOM tests](#webview-dom-tests) below). Drives the shipped `media/chat.js`, dispatches the messages `sidebar.ts` posts, clicks the rendered buttons, asserts on the `postMessage` payload that goes back to the host.
 
@@ -117,11 +117,17 @@ happy-dom test (see [Webview DOM tests](#webview-dom-tests) below). Drives the s
 - `planNotice` / `planBlocked` (command + write variants) render a `.plan-notice` with the right text
 - Read-only plan-history card renders with the persisted verdict label
 
-### `test/acp-integration.test.ts` — ACP wire layer + plan-mode gate (6 tests)
+### `test/acp.test.ts` — ACP client helpers (2 tests)
+
+- **Spawn argv** — `buildGrokAgentArgs` always returns `["agent", "stdio"]`.
+- **Effort compatibility** — setting `grok.defaultEffort` does not add `--reasoning-effort` to ACP startup, preventing the code-2 crash seen with current `grok-build` backends.
+
+### `test/acp-integration.test.ts` — ACP wire layer + plan-mode gate (7 tests)
 
 Spawns the fake `grok agent stdio` from `test/fixtures/fake-grok-acp.cjs` (a ~150-line ACP server encoding only what the protocol requires, not grok version quirks), and drives `src/acp.ts` AcpClient against it over real JSON-RPC stdio. Cross-platform: `.cmd` wrapper on Windows, `.sh` wrapper elsewhere; subprocess startup adds ~50–100ms per test (same order as terminal-manager).
 
 - **Lifecycle** — spawn → initialize → session/new succeeds; a basic prompt round-trips with `_meta.totalTokens`.
+- **Startup effort compatibility** — with `effort:"max"` configured, the fake CLI still receives `agent stdio` and the client logs that effort was not forwarded.
 - **Plan-snoop** — grok's plan.md write (outside the workspace) is allowed AND emits `planFileContent` with the snooped text; the host's `exitPlanRequest` event fires with that content; the file actually lands on disk.
 - **Workspace-write gate** — with `planActive=true`, `fs/write_text_file` for a path inside the workspace is refused with PLAN_BLOCKED, emits `mutationBlocked`, no file lands.
 - **Workspace-write gate (off)** — with `planActive=false`, the same write succeeds end-to-end.
@@ -136,7 +142,7 @@ Pure helpers extracted into [src/plan-restore.ts](src/plan-restore.ts) specifica
 - **`decideRestoreState`** — given the saved log, returns whether to raise the gate and what mode to set on the CLI. Last verdict `rejected` → restore Plan mode; `approved`/`abandoned` → Agent mode; no log / undefined → Agent mode (legacy session, safe default)
 - **End-to-end scenarios** — user rejects then closes VS Code → restore in Plan mode; rejects then approves → Agent mode; rejects then cancels → Agent mode (the regression where Cancel kept restoring into Plan mode); legacy session → Agent mode with no surprise gate
 
-### `test/plan-history-restore.dom.test.ts` — plan-history restore rendering (12 tests)
+### `test/plan-history-restore.dom.test.ts` — plan-history restore rendering (15 tests)
 
 happy-dom test driving the shipped webview through a `planHistoryQueue` + `session/load` replay sequence. This is the visual side of the state machine — what actually renders, in what order, after the host sends saved plans plus a stream of replayed messages.
 

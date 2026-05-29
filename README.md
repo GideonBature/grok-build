@@ -139,7 +139,7 @@ When the panel opens (or you click **+** for a new session):
 1. Locate the `grok` binary: `grok.cliPath` setting → `~/.grok/bin/grok` → `PATH`.
 2. Spawn `grok agent stdio` as a background child — visible in `ps` / Activity Monitor, never opens a terminal window.
 3. Send `initialize` → `session/new` → `session/set_model` over stdio.
-4. If `grok.defaultEffort` is set, pass `--reasoning-effort <level>` at spawn time.
+4. If `grok.defaultEffort` is set, keep it saved for future ACP support but start with the CLI default effort; current `grok-build` ACP sessions reject `reasoningEffort`.
 5. Stream `session/update` notifications (messages, thoughts, tool calls, permission requests) back to the chat.
 
 ### Module map
@@ -187,7 +187,7 @@ Each action appears in chat:
 
 ### Reasoning effort
 
-Click the **gear** icon → effort dots to choose Low → Max. Changing effort restarts the session with `--reasoning-effort <level>`. If chat history exists, a dialog offers **Summarize & Restart** (asks Grok for a summary, starts a fresh session, sends the summary as context) or **Just Restart** (discards).
+Click the **gear** icon → effort dots to save a preferred effort level. Current `grok-build` ACP sessions use the CLI default effort because the backend rejects `reasoningEffort`; the saved preference is retained for future CLI/model support and does not restart the session.
 
 ### Model picker
 
@@ -226,7 +226,7 @@ Or edit the config files directly via gear → *Open global config* / *Open proj
 |---|---|---|
 | `grok.cliPath` | `""` | Path to the `grok` binary. Empty = auto-discover (`~/.grok/bin/grok` → PATH). |
 | `grok.defaultModel` | `""` | Model ID for new sessions. Empty = CLI default. |
-| `grok.defaultEffort` | `""` | Reasoning effort (`low` / `medium` / `high` / `xhigh` / `max`). Empty = CLI default. Changing this restarts the session. |
+| `grok.defaultEffort` | `""` | Saved reasoning effort preference (`low` / `medium` / `high` / `xhigh` / `max`). Current `grok-build` ACP sessions start with the CLI default effort because `reasoningEffort` is rejected by the backend. |
 | `grok.includeActiveFileByDefault` | `true` | Auto-add the active editor as a context chip. |
 | `grok.useCtrlEnterToSend` | `false` | When true, Enter inserts a newline and Ctrl/Cmd+Enter sends. |
 

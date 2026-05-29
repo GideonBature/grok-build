@@ -140,6 +140,34 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     expect(meta).toMatchObject({ totalTokens: 10 });
   });
 
+  it("startup: configured default effort is not forwarded to grok-build ACP stdio", async () => {
+    const logs: string[] = [];
+    const effortClient = new AcpClient({
+      cliPath: fixtureCli(),
+      cwd: workspace,
+      env: {
+        ...process.env,
+        FAKE_WORKSPACE_ROOT: workspace,
+        FAKE_PLAN_PATH: path.join(planHome, ".grok", "sessions", "cwd-x", "sess-effort", "plan.md"),
+      },
+      effort: "max",
+      log: (msg) => logs.push(msg),
+    });
+
+    try {
+      await effortClient.start();
+      await effortClient.newSession();
+
+      expect(effortClient.sessionId).toBe("fake-session-1");
+      expect(logs.join("\n")).toContain("not forwarded");
+      expect(logs.join("\n")).toContain("spawning");
+      expect(logs.join("\n")).toContain("agent stdio");
+      expect(logs.join("\n")).not.toContain("--reasoning-effort");
+    } finally {
+      effortClient.dispose();
+    }
+  });
+
   it("plan-snoop: grok's plan.md write is allowed AND emits planFileContent with the text", async () => {
     client.planActive = true; // gate is up, but plan.md (outside workspace) must still be allowed
     const planFireP = waitFor<string>(client, "planFileContent");

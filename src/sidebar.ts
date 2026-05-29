@@ -847,56 +847,10 @@ See design doc for the full state machine diagram.`;
       case "setEffort": {
         const newLevel = msg.level;
         const cfg2 = vscode.workspace.getConfiguration("grok");
-
-        if (!this.hasHistory || !this.client) {
-          await cfg2.update("defaultEffort", newLevel, vscode.ConfigurationTarget.Global);
-          await this.startSession();
-          break;
-        }
-
-        const choice = await vscode.window.showInformationMessage(
-          "Changing reasoning effort requires restarting the session.",
-          "Summarize & Restart",
-          "Just Restart",
-        );
-        if (!choice) break; // dismissed
-
         await cfg2.update("defaultEffort", newLevel, vscode.ConfigurationTarget.Global);
-
-        if (choice === "Just Restart") {
-          this.post({ type: "clearMessages" });
-          await this.startSession();
-          break;
-        }
-
-        // "Summarize & Restart": silently capture summary, inject as context in new session
-        const currentClient = this.client;
-        this.post({ type: "summarizing" });
-        const chunks: string[] = [];
-        const captureChunk = (t: string) => chunks.push(t);
-        currentClient.on("messageChunk", captureChunk);
-        this.suppressContent = true;
-        try {
-          await currentClient.prompt(
-            "Summarize our conversation so far in a concise paragraph. Be brief.",
-          );
-        } catch { /* best effort */ } finally {
-          currentClient.off("messageChunk", captureChunk);
-          this.suppressContent = false;
-        }
-        const summary = chunks.join("").trim();
-
-        await this.startSession(); // resets suppressContent to false
-
-        if (summary && this.client) {
-          this.post({ type: "sessionContext" });
-          this.suppressContent = true;
-          try {
-            await this.client.prompt(`[Context from previous session]\n${summary}`);
-          } catch { /* best effort */ } finally {
-            this.suppressContent = false;
-          }
-        }
+        void vscode.window.showInformationMessage(
+          "Grok Build ACP sessions currently use the CLI default effort; this setting is saved for future support.",
+        );
         break;
       }
       case "openGlobalConfig": {

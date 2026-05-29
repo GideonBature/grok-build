@@ -6,6 +6,10 @@
 
 - **Plan-mode gate hardening.** Relative workspace write paths are now resolved against the workspace root before containment checks, and common mutating forms of otherwise read-only-looking commands (shell separators/newlines, command-executing heads like `env`/`awk`/`sed`, write/exec flags on `find`/`fd`/`sort`/`tree`, mutating Git forms, and `npm audit --fix`) are blocked before plan approval. Grok's own `.grok/sessions/.../plan.md` write stays allowed and snooped. (#5, #6, thanks @shugav)
 
+### Reasoning effort
+
+- **`grok.defaultEffort` no longer crashes startup.** The setting is still saved, but it's no longer forwarded as `--reasoning-effort` to `grok agent stdio` — current `grok-build` ACP sessions reject `reasoningEffort`, so forwarding it made the CLI exit with code 2 (e.g. after choosing Max). A pure `buildGrokAgentArgs()` helper + a fake-CLI startup regression test guard it. (#3, #4, thanks @shugav)
+
 ## 1.2.1 — 2026-05-29
 
 Robustness fixes from a static audit (cross-checked with Codex). The high-impact ones are in the child-process supervision layer; a few low-impact correctness/perf cleanups ride along. Findings judged overstated or cosmetic (e.g. the non-`file://` URI drop) were left as-is.
