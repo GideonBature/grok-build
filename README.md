@@ -9,7 +9,7 @@ Works with SuperGrok Heavy subscription or xAI API key (standard Grok).
 
 ![Grok Build in the VS Code sidebar](docs/screenshots/v1.2.0.png)
 
-![Grok Build alongside VS Code](docs/screenshots/v1.2.0_vscode.png)
+![Grok Build alongside VS Code](docs/screenshots/v1.3.1_vscode.png)
 
 ---
 

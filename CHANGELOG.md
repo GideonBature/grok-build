@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2 — 2026-06-05
+
+- **Refreshed the Marketplace screenshot.** Updated the "alongside VS Code" README image to `v1.3.1_vscode.png` so the listing reflects the current UI. No code changes. ([README.md](README.md))
+
 ## 1.3.1 — 2026-06-05
 
 ### Fixes
