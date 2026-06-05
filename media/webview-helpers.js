@@ -90,7 +90,24 @@
     return { index: m.index, length: m[0].length };
   }
 
-  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase };
+  // Build the `answers` map for an ask_user_question response from the user's
+  // per-question selections. `selections` is an array parallel to `questions`,
+  // each entry the array of chosen option labels for that question. Returns the
+  // map keyed by question text (multi-select labels joined with ", ", matching
+  // grok's HashMap<String,String> contract) and `allAnswered` so the card knows
+  // when Submit should be enabled.
+  function buildQuestionAnswers(questions, selections) {
+    const answers = {};
+    let allAnswered = true;
+    (questions || []).forEach((q, i) => {
+      const picked = (selections && selections[i]) || [];
+      if (picked.length === 0) allAnswered = false;
+      answers[q.question] = picked.join(", ");
+    });
+    return { answers, allAnswered };
+  }
+
+  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {

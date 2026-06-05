@@ -6,6 +6,8 @@ import {
   makeAckResponse,
   makeExitPlanResponse,
   makePermissionResponse,
+  makeQuestionCancelledResponse,
+  makeQuestionResponse,
   makeRequest,
   parseAcpLine,
   routeSessionUpdate,
@@ -74,6 +76,24 @@ export interface ExitPlanRequest {
   id: number | string;
   sessionId: string;
   plan: string;
+}
+
+export interface QuestionOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+
+export interface QuestionItem {
+  question: string;
+  options: QuestionOption[];
+  multiSelect?: boolean;
+}
+
+export interface QuestionRequest {
+  id: number | string;
+  sessionId: string;
+  questions: QuestionItem[];
 }
 
 export interface FsReadHandler {
@@ -284,6 +304,20 @@ export class AcpClient extends EventEmitter {
     this.writeLine(makeExitPlanResponse(requestId, type));
   }
 
+  /** Respond to a pending ask_user_question request with the user's selections. */
+  respondQuestion(
+    requestId: number | string,
+    answers: Record<string, string>,
+    annotations: Record<string, { notes?: string; preview?: string }> = {},
+  ): void {
+    this.writeLine(makeQuestionResponse(requestId, answers, annotations));
+  }
+
+  /** Respond to a pending ask_user_question request that the user dismissed. */
+  respondQuestionCancelled(requestId: number | string): void {
+    this.writeLine(makeQuestionCancelledResponse(requestId));
+  }
+
   dispose(): void {
     this.rl?.close();
     try { this.proc?.kill(); } catch { /* already gone */ }
@@ -468,6 +502,18 @@ export class AcpClient extends EventEmitter {
         };
         this.emit("exitPlanRequest", req);
         return;
+      }
+      if (
+        method === "x.ai/ask_user_question" ||
+        method === "_x.ai/ask_user_question"
+      ) {
+        const req: QuestionRequest = {
+          id,
+          sessionId: params?.sessionId ?? this.sessionId ?? "",
+          questions: Array.isArray(params?.questions) ? params.questions : [],
+        };
+        this.emit("questionRequest", req);
+        return; // response is async — host calls respondQuestion()/respondQuestionCancelled()
       }
       if (
         method === "_x.ai/session_notification" ||

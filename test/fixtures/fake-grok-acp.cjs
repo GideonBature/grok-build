@@ -3,7 +3,8 @@
 // ACP that src/acp.ts actually exercises:
 //   - initialize, session/new, session/load, session/set_model, session/set_mode,
 //     session/prompt, session/cancel  (client → server)
-//   - fs/write_text_file, terminal/create, x.ai/exit_plan_mode  (server → client)
+//   - fs/write_text_file, terminal/create, x.ai/exit_plan_mode,
+//     x.ai/ask_user_question  (server → client)
 //   - session/update notifications (agent_message_chunk)
 //
 // Each test drives a scenario by sending a prompt whose text matches one of the
@@ -155,6 +156,20 @@ async function runScenario(promptId, text) {
     if (text.includes("SCENARIO_READONLY_TERMINAL")) {
       const termResp = await callClient("terminal/create", { sessionId: SESSION_ID, command: "ls -la" });
       process.stderr.write(`TERMINAL_RESPONSE: ${JSON.stringify(termResp)}\n`);
+      respondOk(promptId, { stopReason: "end_turn", _meta: { totalTokens: 50 } });
+      return;
+    }
+
+    if (text.includes("SCENARIO_ASK_QUESTION")) {
+      const askResp = await callClient("x.ai/ask_user_question", {
+        sessionId: SESSION_ID,
+        questions: [{
+          question: "Pick one?",
+          options: [{ label: "Option A", description: "first" }, { label: "Option B" }],
+          multiSelect: false,
+        }],
+      });
+      process.stderr.write(`ASK_RESPONSE: ${JSON.stringify(askResp)}\n`);
       respondOk(promptId, { stopReason: "end_turn", _meta: { totalTokens: 50 } });
       return;
     }

@@ -5,6 +5,8 @@ import {
   makeAckResponse,
   makeExitPlanResponse,
   makePermissionResponse,
+  makeQuestionCancelledResponse,
+  makeQuestionResponse,
   makeRequest,
   parseAcpLine,
   routeSessionUpdate,
@@ -194,6 +196,30 @@ describe("response builders", () => {
 
   it("makeAckResponse defaults to empty result", () => {
     expect(makeAckResponse(3)).toEqual({ jsonrpc: "2.0", id: 3, result: {} });
+  });
+
+  it("makeQuestionResponse carries the accepted outcome tag grok's deserializer needs (#12)", () => {
+    // The old catch-all replied with {} → "missing field outcome". The accepted
+    // variant is internally tagged on `outcome` and carries answers/annotations.
+    const r = makeQuestionResponse(5, { "Pick one?": "Option A" });
+    expect(r).toEqual({
+      jsonrpc: "2.0",
+      id: 5,
+      result: { outcome: "accepted", answers: { "Pick one?": "Option A" }, annotations: {} },
+    });
+  });
+
+  it("makeQuestionResponse passes annotations through when provided", () => {
+    const r = makeQuestionResponse(6, { Q: "A" }, { Q: { notes: "n" } });
+    expect(r.result.annotations).toEqual({ Q: { notes: "n" } });
+  });
+
+  it("makeQuestionCancelledResponse sends the cancelled outcome", () => {
+    expect(makeQuestionCancelledResponse(8)).toEqual({
+      jsonrpc: "2.0",
+      id: 8,
+      result: { outcome: "cancelled" },
+    });
   });
 
   it("makeRequest wraps params with jsonrpc 2.0", () => {

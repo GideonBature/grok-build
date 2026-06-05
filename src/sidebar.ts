@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AcpClient, EffortLevel, ExitPlanRequest, PermissionRequest } from "./acp";
+import { AcpClient, EffortLevel, ExitPlanRequest, PermissionRequest, QuestionRequest } from "./acp";
 import { resolveVoiceKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice";
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
@@ -53,6 +53,8 @@ type WebviewMsg =
   | { type: "dropFile"; path: string; shift: boolean }
   | { type: "permissionAnswer"; requestId: number | string; optionId: string }
   | { type: "exitPlanAnswer"; requestId: number | string; verdict: "approved" | "abandoned" | "rejected"; comment?: string }
+  | { type: "questionAnswer"; requestId: number | string; answers?: Record<string, string>; annotations?: Record<string, { notes?: string; preview?: string }> }
+  | { type: "questionCancel"; requestId: number | string }
   | { type: "setModel"; modelId: string }
   | { type: "runInstallCmd" }
   | { type: "runGrokLogin" }
@@ -814,6 +816,12 @@ See design doc for the full state machine diagram.`;
       if (gen !== this.sessionGen) return;
       void this.postExitPlanRequest(req, gen);
     });
+    client.on("questionRequest", (req: QuestionRequest) => {
+      if (gen !== this.sessionGen) return;
+      // Questions are read-only and need a human — surface them in every mode
+      // (plan/YOLO included); there's no sensible auto-answer.
+      this.post({ type: "questionRequest", req });
+    });
     client.on("exit", (code) => {
       if (gen !== this.sessionGen) return; // suppress exit events from disposed/replaced clients
       this.post({ type: "exit", code });
@@ -867,6 +875,17 @@ See design doc for the full state machine diagram.`;
         this.post({ type: "historyReplay", active: true });
         try {
           await client.loadSession(resumeId, defaultModel || undefined);
+        } catch (e) {
+          // A resumed session's agent is fixed by its history, so a cross-agent
+          // default model (e.g. a Composer model while resuming a grok-build
+          // session, or vice-versa) can't be applied with a live set_model — it
+          // errors MODEL_SWITCH_INCOMPATIBLE_AGENT. The session itself already
+          // loaded and replayed; just keep its own model instead of letting the
+          // whole resume crash with "Grok exited (code null)".
+          if (!isIncompatibleAgentError(e)) throw e;
+          this.output.appendLine(
+            `[resume] kept the session's own model; default '${defaultModel}' needs a different agent`,
+          );
         } finally {
           this.post({ type: "historyReplay", active: false });
         }
@@ -978,6 +997,12 @@ See design doc for the full state machine diagram.`;
         break;
       case "exitPlanAnswer":
         this.handleExitPlan(msg.requestId, msg.verdict, msg.comment);
+        break;
+      case "questionAnswer":
+        this.client?.respondQuestion(msg.requestId, msg.answers ?? {}, msg.annotations ?? {});
+        break;
+      case "questionCancel":
+        this.client?.respondQuestionCancelled(msg.requestId);
         break;
       case "setModel":
         await this.switchModel(msg.modelId);

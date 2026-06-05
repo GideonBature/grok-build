@@ -267,6 +267,28 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     expect((client as any).__terminalCalls()).toBe(1); // handler was called → command allowed
   });
 
+  // Regression (#12): grok's x.ai/ask_user_question must get a response with the
+  // `outcome` tag. The old catch-all replied `{}` → "missing field outcome" and
+  // the tool failed. The host now emits a `questionRequest`; respondQuestion
+  // sends { outcome: "accepted", answers, annotations }.
+  it("ask_user_question: host emits questionRequest and respondQuestion replies with outcome:accepted", async () => {
+    const reqP = waitFor<any>(client, "questionRequest");
+    const promptP = client.prompt("SCENARIO_ASK_QUESTION");
+
+    const req = await reqP;
+    expect(req.sessionId).toBe("fake-session-1");
+    expect(req.questions[0].question).toBe("Pick one?");
+    expect(req.questions[0].options[0].label).toBe("Option A");
+
+    client.respondQuestion(req.id, { "Pick one?": "Option A" });
+
+    await promptP;
+    // The fake CLI echoes the host's reply on stderr — assert grok received a
+    // well-formed accepted outcome, not a bare {}.
+    await waitForStderr(stderr, /ASK_RESPONSE.*"outcome":"accepted"/);
+    expect(stderr.join("")).toMatch(/"answers":\{"Pick one\?":"Option A"\}/);
+  });
+
   // Regression (HIGH): writing to the CLI's stdin after the pipe is gone must
   // not crash the extension host. Pre-fix, respond*/cancel did a bare
   // `this.proc?.stdin.write(...)` — a destroyed pipe throws ERR_STREAM_DESTROYED

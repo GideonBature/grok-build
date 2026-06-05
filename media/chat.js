@@ -78,6 +78,16 @@
     sessionSearch: "",
     renamingSessionId: null,
     replaying: false,
+    // Live ask_user_question tool calls (toolCallId → {questions, fromReplay}).
+    // grok emits a tool_call alongside the live x.ai/ask_user_question request; we
+    // stash it to suppress the generic tool chip (the interactive card from
+    // `questionRequest` stands in).
+    questionToolCalls: new Map(),
+    // Restored question cards on resume (toolCallId → card element). On replay grok
+    // sends a tool_call per question (with rawInput.questions); we render the card
+    // immediately and fill the answer in whenever it arrives — on the tool_call
+    // snapshot or a later update with the same toolCallId.
+    restoredCardsByToolCallId: new Map(),
     // Saved plan cards waiting to be rendered inline as the conversation replays.
     // Each entry has { text, verdict, afterUserMessage? }. We drain entries whose
     // afterUserMessage matches the current userMsgCount as user messages stream
@@ -217,7 +227,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers } = globalThis.GrokWebviewHelpers;
 
   function renderDiffCode(code) {
     const lines = code.replace(/\n+$/, "").split("\n");
@@ -1401,6 +1411,265 @@
     scrollToBottom();
   }
 
+  // ---------- question card (ask_user_question) ----------
+
+  // A "Grok is asking" label + the question text, prominent. Shared by the live
+  // and restored cards so they look identical.
+  function buildQuestionHead(el, headingText) {
+    const title = document.createElement("div");
+    title.className = "card-title";
+    title.textContent = headingText;
+    el.appendChild(title);
+    return title;
+  }
+
+  // The green "✓ <labels>" line shown once a question is answered (or "(skipped)").
+  function answerLineEl(labels) {
+    const ans = document.createElement("div");
+    ans.className = "question-answer";
+    ans.textContent = labels ? "✓ " + labels : "(skipped)";
+    return ans;
+  }
+
+  // Inline card for grok's x.ai/ask_user_question. Renders each question with
+  // its options; single-select with one question resolves on click (like the
+  // permission card), otherwise the user picks across questions and submits.
+  // The host replies with { outcome: "accepted", answers } — keyed by question
+  // text — which unblocks grok's tool mid-turn. On answer the card COLLAPSES to
+  // the question + a clear green "✓ <chosen>" so it's obvious grok received it
+  // (the bare grey-out gave no such signal).
+  function addQuestionCard(req) {
+    clearWelcome();
+    const questions = Array.isArray(req.questions) ? req.questions : [];
+    const el = document.createElement("div");
+    el.className = "card question";
+
+    const title = buildQuestionHead(el, "Grok is asking");
+
+    // selections[i] = array of chosen labels for question i.
+    const selections = questions.map(() => []);
+    const oneClick = questions.length === 1 && !questions[0].multiSelect;
+
+    let submitBtn;
+    let skip;
+    // Collapse the card to its answered/skipped representation: drop the option
+    // buttons + Submit + Skip, retitle, and append the chosen answer per block.
+    const collapse = (skipped) => {
+      el.classList.add("resolved");
+      title.textContent = skipped ? "Skipped" : "You answered";
+      const actions = el.querySelector(".card-actions");
+      if (actions) actions.remove();
+      if (skip) skip.remove();
+      [...el.querySelectorAll(".question-block")].forEach((block, qi) => {
+        const opts = block.querySelector(".question-options");
+        if (opts) opts.remove();
+        block.appendChild(answerLineEl(skipped ? "" : (selections[qi] || []).join(", ")));
+      });
+    };
+    const submit = () => {
+      const { answers } = buildQuestionAnswers(questions, selections);
+      vscode.postMessage({ type: "questionAnswer", requestId: req.id, answers, annotations: {} });
+      collapse(false);
+    };
+
+    questions.forEach((q, qi) => {
+      const block = document.createElement("div");
+      block.className = "question-block";
+      const qText = document.createElement("div");
+      qText.className = "question-text";
+      qText.textContent = questionText(q);
+      block.appendChild(qText);
+
+      const opts = document.createElement("div");
+      opts.className = "question-options";
+      for (const opt of q.options || []) {
+        const btn = document.createElement("button");
+        btn.className = "question-option";
+        const lbl = document.createElement("span");
+        lbl.className = "question-option-label";
+        lbl.textContent = opt.label || "";
+        btn.appendChild(lbl);
+        if (opt.description) {
+          const desc = document.createElement("span");
+          desc.className = "question-option-desc";
+          desc.textContent = opt.description;
+          btn.appendChild(desc);
+        }
+        btn.onclick = () => {
+          if (oneClick) {
+            selections[qi] = [opt.label];
+            submit();
+            return;
+          }
+          if (q.multiSelect) {
+            const i = selections[qi].indexOf(opt.label);
+            if (i >= 0) { selections[qi].splice(i, 1); btn.classList.remove("selected"); }
+            else { selections[qi].push(opt.label); btn.classList.add("selected"); }
+          } else {
+            selections[qi] = [opt.label];
+            for (const sib of opts.querySelectorAll(".question-option")) sib.classList.remove("selected");
+            btn.classList.add("selected");
+          }
+          if (submitBtn) {
+            submitBtn.disabled = !buildQuestionAnswers(questions, selections).allAnswered;
+          }
+        };
+        opts.appendChild(btn);
+      }
+      block.appendChild(opts);
+      el.appendChild(block);
+    });
+
+    if (!oneClick) {
+      const actions = document.createElement("div");
+      actions.className = "card-actions";
+      submitBtn = document.createElement("button");
+      submitBtn.className = "primary";
+      submitBtn.textContent = "Submit";
+      submitBtn.disabled = true;
+      submitBtn.onclick = submit;
+      actions.appendChild(submitBtn);
+      el.appendChild(actions);
+    }
+
+    skip = document.createElement("button");
+    skip.className = "question-skip";
+    skip.textContent = "Skip";
+    skip.onclick = () => {
+      vscode.postMessage({ type: "questionCancel", requestId: req.id });
+      collapse(true);
+    };
+    el.appendChild(skip);
+
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  // Extract the text payload from a tool_call_update's content array
+  // (`[{ type:"content", content:{ type:"text", text } }]`, with a flatter
+  // `{ text }` fallback).
+  function toolUpdateText(call) {
+    const c = call && call.content;
+    if (Array.isArray(c)) {
+      for (const item of c) {
+        const t = (item && item.content && item.content.text) ?? (item && item.text);
+        if (typeof t === "string") return t;
+      }
+    }
+    return "";
+  }
+
+  // The ask_user_question tool is named differently per agent (grok-build:
+  // `ask_user_question`, cursor/composer: `AskQuestion`), and on session REPLAY
+  // grok relabels the tool_call's title to the display form "Ask: <question>".
+  // So we detect by title OR by the presence of `rawInput.questions`.
+  function isQuestionToolTitle(title) {
+    const t = String(title || "").replace(/[_\s]/g, "").toLowerCase();
+    return t === "askuserquestion" || t === "askquestion";
+  }
+  // Pull the question list from a (possibly replayed) ask tool_call. Falls back to
+  // synthesizing one question from an "Ask: <question>" display title when the
+  // structured rawInput.questions didn't survive the replay.
+  function questionsFromCall(call) {
+    const q = call && call.rawInput && call.rawInput.questions;
+    if (Array.isArray(q) && q.length) return q;
+    const title = String((call && call.title) || "");
+    if (/^ask[:\s]/i.test(title)) return [{ question: title.replace(/^ask[:\s]+/i, "").trim() }];
+    return null;
+  }
+  function isQuestionTool(call) {
+    return isQuestionToolTitle(call && call.title) || questionsFromCall(call) != null;
+  }
+
+  // A question's display text (grok-build uses `question`, cursor uses `prompt`).
+  function questionText(q) {
+    return (q && (q.question || q.prompt)) || "";
+  }
+
+  // Resolve the chosen labels per question from grok's replayed tool result.
+  // Two formats exist (the agents differ):
+  //   grok-build: `User has answered your questions: "<question>"="<labels>", …`
+  //   cursor:     `User questions responses:\nQuestion <qid>: Selected option(s) <oid>, <oid>`
+  // Returns an array of label strings parallel to `questions` (empty = unmatched).
+  function restoredLabelsByQuestion(questions, answerText) {
+    const text = String(answerText || "");
+    const out = questions.map(() => "");
+    let m, matched = false;
+    // Format A — quoted "question"="labels".
+    const reA = /"([^"]+)"\s*=\s*"([^"]*)"/g;
+    while ((m = reA.exec(text))) {
+      const qi = questions.findIndex((q) => questionText(q) === m[1]);
+      if (qi >= 0) { out[qi] = m[2]; matched = true; }
+    }
+    if (matched) return out;
+    // Format B — option ids per question id; map ids back to labels.
+    const reB = /Question\s+([^\s:]+)\s*:\s*Selected option\(s\)\s*([^\n]*)/gi;
+    while ((m = reB.exec(text))) {
+      const qid = m[1].trim();
+      const qi = questions.findIndex((q) => String(q && q.id) === qid);
+      if (qi < 0) continue;
+      const opts = questions[qi].options || [];
+      out[qi] = m[2].split(",").map((s) => s.trim()).filter(Boolean).map((id) => {
+        const o = opts.find((x) => String(x && x.id) === id || (x && x.label) === id);
+        return o ? o.label : id;
+      }).join(", ");
+    }
+    return out;
+  }
+
+  function cleanAnswerText(text) {
+    return String(text || "")
+      .replace(/^User has answered your questions:\s*/i, "")
+      .replace(/^User questions responses:\s*/i, "")
+      .replace(/\s*You can now continue.*$/is, "")
+      .trim();
+  }
+
+  // Read-only "You answered" card rebuilt during session resume. The questions
+  // render immediately (they're always on the replayed tool_call); the answer is
+  // filled in by `fillRestoredAnswer` when it lands (on the tool_call snapshot or
+  // a later update). Handles both the grok-build and cursor/composer schemas.
+  // Returns the card element so the update path can fill its answer later.
+  function addRestoredQuestionCard(questions, answerText) {
+    clearWelcome();
+    const qs = Array.isArray(questions) ? questions : [];
+    const el = document.createElement("div");
+    el.className = "card question resolved";
+    el._questions = qs;
+    buildQuestionHead(el, "You answered");
+    qs.forEach((q) => {
+      const block = document.createElement("div");
+      block.className = "question-block";
+      const qText = document.createElement("div");
+      qText.className = "question-text";
+      qText.textContent = questionText(q);
+      block.appendChild(qText);
+      el.appendChild(block);
+    });
+    messagesEl.appendChild(el);
+    if (answerText) fillRestoredAnswer(el, answerText);
+    scrollToBottom();
+    return el;
+  }
+
+  // Append the chosen answer(s) to a restored card once the result text is known.
+  // Idempotent — the answer often arrives both on the tool_call and in an update.
+  function fillRestoredAnswer(el, answerText) {
+    if (!el || el._answered || !answerText) return;
+    const qs = el._questions || [];
+    const labels = restoredLabelsByQuestion(qs, answerText);
+    const anyLabel = labels.some((l) => l);
+    if (qs.length && anyLabel) {
+      [...el.querySelectorAll(".question-block")].forEach((block, qi) => {
+        if (!block.querySelector(".question-answer")) block.appendChild(answerLineEl(labels[qi]));
+      });
+    } else {
+      const clean = cleanAnswerText(answerText);
+      if (clean) el.appendChild(answerLineEl(clean));
+    }
+    el._answered = true;
+  }
+
   // ---------- plan card ----------
 
   const VERDICT_LABEL = {
@@ -1937,10 +2206,49 @@
         break;
       case "toolCall":
         if (state.suppressReplayTurn) break; // tool calls inside the primer turn (unlikely but defensive)
+        if (isQuestionTool(msg.call)) {
+          // No generic tool chip — the question card stands in for it.
+          if (state.replaying) {
+            // Resume: render the read-only card NOW from the tool_call (the
+            // questions are always present); the answer rides on this snapshot or
+            // arrives in a later update keyed by the same toolCallId.
+            const el = addRestoredQuestionCard(questionsFromCall(msg.call) || [], toolUpdateText(msg.call));
+            if (msg.call.toolCallId) state.restoredCardsByToolCallId.set(msg.call.toolCallId, el);
+          } else {
+            // Live: the interactive card comes from `questionRequest`; just stash
+            // so the matching update is recognized (and the chip stays suppressed).
+            state.questionToolCalls.set(msg.call.toolCallId, { questions: questionsFromCall(msg.call) || [] });
+          }
+          break;
+        }
         addToToolGroup(msg.call);
         break;
       case "toolCallUpdate": {
         if (state.suppressReplayTurn) break;
+        // Resume: fill the answer into the matching restored card when it lands.
+        const restoredEl = state.restoredCardsByToolCallId.get(msg.call?.toolCallId);
+        if (restoredEl) {
+          fillRestoredAnswer(restoredEl, toolUpdateText(msg.call));
+          break;
+        }
+        // Live: the interactive card already handled the answer; drop the stash so
+        // the chip stays suppressed and we don't fall through to the diff path.
+        if (state.questionToolCalls.has(msg.call?.toolCallId)) {
+          if (toolUpdateText(msg.call) || String(msg.call?.status).toLowerCase() === "completed") {
+            state.questionToolCalls.delete(msg.call.toolCallId);
+          }
+          break;
+        }
+        // Fallback: a replayed answer update with no matching card (tool_call
+        // missing/unmatched). Rebuild a card from the result text rather than
+        // leaving the resumed turn blank.
+        if (state.replaying) {
+          const t = toolUpdateText(msg.call);
+          if (/answered your questions|questions responses/i.test(t)) {
+            addRestoredQuestionCard([], t);
+            break;
+          }
+        }
         const c = msg.call?.content;
         if (Array.isArray(c)) {
           for (const item of c) {
@@ -1962,6 +2270,9 @@
         break;
       case "exitPlanRequest":
         addPlanCard(msg.req);
+        break;
+      case "questionRequest":
+        addQuestionCard(msg.req);
         break;
       case "planHistory":
         addPlanHistoryCard(msg.text, msg.verdict, msg.planPath, msg.planName);

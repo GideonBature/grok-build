@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — plain JS module, no types
-import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase } from "../media/webview-helpers.js";
+import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers } from "../media/webview-helpers.js";
 
 describe("looksLikeFileRef", () => {
   it("accepts a bare filename with a known extension", () => {
@@ -208,5 +208,32 @@ describe("trailingSendPhrase", () => {
 
   it("supports a custom phrase", () => {
     expect(trailingSendPhrase("do it now go", "go")).toEqual({ index: 10, length: 2 });
+  });
+});
+
+describe("buildQuestionAnswers", () => {
+  it("keys the answer map by question text → chosen label", () => {
+    const questions = [{ question: "Pick a color?", options: [{ label: "Red" }, { label: "Blue" }] }];
+    const { answers, allAnswered } = buildQuestionAnswers(questions, [["Blue"]]);
+    expect(answers).toEqual({ "Pick a color?": "Blue" });
+    expect(allAnswered).toBe(true);
+  });
+
+  it("joins multi-select labels with ', '", () => {
+    const questions = [{ question: "Which?", options: [], multiSelect: true }];
+    const { answers } = buildQuestionAnswers(questions, [["A", "C"]]);
+    expect(answers).toEqual({ "Which?": "A, C" });
+  });
+
+  it("flags allAnswered=false while any question is unanswered", () => {
+    const questions = [{ question: "Q1" }, { question: "Q2" }];
+    const r = buildQuestionAnswers(questions, [["A"], []]);
+    expect(r.allAnswered).toBe(false);
+    expect(r.answers).toEqual({ Q1: "A", Q2: "" });
+  });
+
+  it("handles empty / missing inputs", () => {
+    expect(buildQuestionAnswers([], [])).toEqual({ answers: {}, allAnswered: true });
+    expect(buildQuestionAnswers(undefined, undefined)).toEqual({ answers: {}, allAnswered: true });
   });
 });

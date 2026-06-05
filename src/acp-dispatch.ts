@@ -109,6 +109,29 @@ export function makeExitPlanResponse(
   return { jsonrpc: "2.0", id, error: { code: -32000, message } };
 }
 
+/**
+ * Response to grok's `x.ai/ask_user_question` request (Rust struct
+ * `AskUserQuestionExtResponse` — an internally-tagged enum on field `outcome`,
+ * variants `accepted` | `chat_about_this` | `skip_interview` | `cancelled`).
+ * The `accepted` variant carries `answers` (question text → chosen option label,
+ * multi-select labels joined) and `annotations` (question text → { notes,
+ * preview }). The old catch-all replied with a bare `{}`, which grok's
+ * deserializer rejects with "missing field `outcome` at line 1 column 2" so the
+ * tool reports failure (issue #12).
+ */
+export function makeQuestionResponse(
+  id: number | string,
+  answers: Record<string, string>,
+  annotations: Record<string, { notes?: string; preview?: string }> = {},
+) {
+  return { jsonrpc: "2.0", id, result: { outcome: "accepted", answers, annotations } };
+}
+
+/** User dismissed the question without answering → grok's `cancelled` outcome. */
+export function makeQuestionCancelledResponse(id: number | string) {
+  return { jsonrpc: "2.0", id, result: { outcome: "cancelled" } };
+}
+
 export function makeAckResponse(id: number | string, result: any = {}) {
   return { jsonrpc: "2.0", id, result };
 }

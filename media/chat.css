@@ -1038,6 +1038,71 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
 .card-actions button:disabled { opacity: 0.4; cursor: default; }
 .card.resolved { opacity: 0.5; border-left-color: var(--vscode-editorWidget-border); }
 
+/* ---------- question card (ask_user_question) ---------- */
+.card.question { border-left-color: var(--vscode-charts-purple, #b180d7); }
+/* "Grok is asking" / "You answered" reads as a small label so the question
+   itself is the prominent line. */
+.card.question .card-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+.card .question-block { display: flex; flex-direction: column; gap: 6px; }
+.card .question-text {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  font-family: var(--vscode-font-family);
+}
+/* The chosen answer, shown once the card is answered — kept bright (the card
+   isn't dimmed) so it's an unmistakable "grok got this" signal. */
+.card.question.resolved { opacity: 1; }
+.card .question-answer {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vscode-charts-green, #89d185);
+}
+.card .question-options { display: flex; flex-direction: column; gap: 4px; }
+.card button.question-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+.card button.question-option:hover { background: var(--vscode-list-hoverBackground); }
+.card button.question-option.selected {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+.card button.question-option:disabled { opacity: 0.4; cursor: default; }
+.card .question-option-label { font-weight: 600; }
+.card .question-option-desc { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.card button.question-skip {
+  align-self: flex-start;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+}
+.card button.question-skip:disabled { opacity: 0.4; cursor: default; text-decoration: none; }
+
 /* ---- collapsible user messages ---- */
 
 .msg.user.collapsible .body {
