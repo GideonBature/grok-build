@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.2 — 2026-06-09
+
+> Generated video renders now, and inline media is a tighter thumbnail.
+
+### Fixes
+
+- **Generated videos (`/imagine-video`) finally render.** Detection, path extraction, MIME, and CSP were all already correct — the failure was the delivery: a multi-MB clip base64-inlined into a single `postMessage` `data:` URI was silently dropped, so the `<video>` got an empty source. Generated files are now served via `webview.asWebviewUri` (the grok home is a `localResourceRoots` entry), so the webview **streams the file straight from disk** instead of carrying it as a giant string — videos play, and large images load lazily. Files written outside the served roots still fall back to a base64 `data:` URI, so nothing regresses. ([src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js))
+
+### Polish
+
+- **The Copy path / Open in VS Code hover icons now sit on the image.** They were anchored to the chat column's right edge, so on a thumbnail they floated in empty space well to the right of the picture. The media block is now sized to the rendered image, so the icons pin to the image's own top-right corner — for videos too. ([media/chat.css](media/chat.css))
+- **Inline media is capped at 320px wide** (was 640px), so a generation reads as a compact thumbnail in the narrow sidebar instead of dominating the chat. The file is untouched — click an image (or **Open in VS Code**) for full resolution. ([media/chat.css](media/chat.css))
+
 ## 1.4.1 — 2026-06-09
 
 > A two-part fix for generated images that stopped rendering in 1.4.0.

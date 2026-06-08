@@ -178,6 +178,10 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       localResourceRoots: [
         vscode.Uri.joinPath(this.context.extensionUri, "media"),
         vscode.Uri.joinPath(this.context.extensionUri, "resources"),
+        // grok writes generated media under ~/.grok/sessions/<cwd>/<id>/{images,videos};
+        // serving it via asWebviewUri (instead of a base64 data: URI) lets the
+        // webview stream a multi-MB video from disk — see postGeneratedMedia.
+        vscode.Uri.file(resolveGrokHome()),
       ],
     };
     view.webview.html = this.getHtml(view.webview);
@@ -573,11 +577,14 @@ See design doc for the full state machine diagram.`;
 
   /**
    * Forward generated media (grok's `/imagine` image or `/imagine-video` video)
-   * to the webview. The webview can only load `data:` URIs and remote URLs (CSP +
-   * localResourceRoots), so file paths — which is how grok writes media into the
-   * session dir — are read here and inlined as base64. Remote URLs pass through
-   * as a link. Best-effort: a read failure just drops the media rather than
-   * breaking the turn.
+   * to the webview. Remote URLs pass through as a link. File paths — how grok
+   * writes media into its session dir — are served via `asWebviewUri` when they
+   * live under a `localResourceRoots` entry (the grok home is one), so the
+   * webview streams the file straight from disk. That matters for video: a
+   * multi-MB clip base64-inlined into a single `postMessage` was silently
+   * dropped, which is why `/imagine-video` never rendered. Files outside the
+   * served roots fall back to a base64 `data:` URI. Best-effort: a failure just
+   * drops the media rather than breaking the turn.
    */
   private async postGeneratedMedia(m: MediaRef, gen: number): Promise<void> {
     try {
@@ -589,14 +596,34 @@ See design doc for the full state machine diagram.`;
         this.post({ type: "media", media: m.media, url: m.uri });
         return;
       }
-      // path: inline the file so it renders regardless of where grok wrote it.
+      const mime = m.mimeType || guessMediaMime(m.path);
+      // Served from disk when the file is under a localResourceRoot (grok home):
+      // the webview pulls bytes lazily, so even a big video renders.
+      const webview = this.view?.webview;
+      if (webview && this.isServableFromDisk(m.path)) {
+        const src = webview.asWebviewUri(vscode.Uri.file(m.path)).toString();
+        this.post({ type: "media", media: m.media, src, mimeType: mime, path: m.path });
+        return;
+      }
+      // Outside the served roots — inline as base64 so it still renders.
       const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(m.path));
       if (gen !== this.sessionGen) return;
-      const mime = m.mimeType || guessMediaMime(m.path);
       const b64 = Buffer.from(bytes).toString("base64");
       this.post({ type: "media", media: m.media, src: `data:${mime};base64,${b64}`, path: m.path });
     } catch (e) {
       this.output.appendLine(`[media] failed to forward generated media: ${(e as Error).message}`);
+    }
+  }
+
+  /** True when `p` resolves inside the grok home — the localResourceRoot grok
+   * generated media lives under, so `asWebviewUri` can serve it from disk. */
+  private isServableFromDisk(p: string): boolean {
+    try {
+      const root = path.resolve(resolveGrokHome());
+      const rel = path.relative(root, path.resolve(p));
+      return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+    } catch {
+      return false;
     }
   }
 

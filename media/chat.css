@@ -366,25 +366,26 @@ code {
 
 /* Generated media (grok /imagine image, /imagine-video video) */
 .generated-image {
-  /* A normal block so the child's `max-width: 100%` resolves against a definite
-     width. A shrink-to-fit container (width: fit-content) makes that basis
-     indefinite, which can collapse a replaced <img> to zero width — that's what
-     made generations invisible in 1.4.0. position:relative anchors the overlay. */
+  /* A definite-width block that hugs the media: width is min(100%, 320px), so it
+     never exceeds the chat column (responsive) and caps the thumbnail at 320px.
+     The media fills it (width:100% below), so the block's right edge IS the
+     image's right edge — that's what anchors the hover actions ON the image
+     rather than out at the chat column's edge (position:relative). We size the
+     block explicitly instead of shrink-wrapping it (fit-content/inline-block),
+     because a shrink-to-fit container collapses a replaced <img> to zero width in
+     Chromium — the 1.4.0 invisible-image bug. The file itself is untouched
+     (click / Open in VS Code shows full res). */
   position: relative;
+  width: min(100%, 320px);
   margin: 6px var(--pad);
 }
 .generated-image img,
 .generated-image video {
-  /* Cap the rendered size — full-resolution generations are impractical to view
-     inline. 640px on the longer edge keeps them legible without flooding the
-     chat (and `100%` keeps them inside a narrow sidebar); the file itself is
-     untouched (Open in VS Code shows full res). */
-  max-width: min(100%, 640px);
-  max-height: 640px;
+  display: block;
+  width: 100%;
   height: auto;
   border-radius: 6px;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  display: block;
 }
 /* Hover actions over the media's top-right corner — mirrors .code-copy-btn. */
 .generated-media-actions {

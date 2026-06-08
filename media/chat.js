@@ -1280,10 +1280,11 @@
   }
 
   // Render generated media (grok `/imagine` image or `/imagine-video` video).
-  // The host has already inlined file-path output as a data: URI; `url` is a
-  // remote link we open externally. Clicking an inlined image opens its source
-  // file in VS Code; video gets native <video> controls. Both expose hover
-  // icons (copy path / open in VS Code) over the top-right corner.
+  // `src` is a renderable source the host resolved for a generated file — a
+  // webview URI streamed from disk (big videos) or a base64 data: URI; `url` is
+  // a remote link we open externally. Clicking an image opens its source file in
+  // VS Code; video gets native <video> controls. Both expose hover icons (copy
+  // path / open in VS Code) over the top-right corner.
   function addGeneratedMedia(msg) {
     if (state.suppressReplayTurn) return;
     const isVideo = msg.media === "video";
