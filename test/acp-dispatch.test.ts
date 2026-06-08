@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   collectToolImages,
+  extractGeneratedImagePaths,
   extractImageContent,
   extractPromptMeta,
+  isImageGenToolCall,
   isIncompatibleAgentError,
   makeAckResponse,
   makeExitPlanResponse,
@@ -344,5 +346,60 @@ describe("routeSessionUpdate image chunks", () => {
       content: { type: "text", text: "hello" },
     });
     expect(r).toEqual({ event: "messageChunk", text: "hello" });
+  });
+});
+
+describe("image_gen (grok's real /imagine wire shape)", () => {
+  // Confirmed against grok 0.2.33 (research/image-generation.md): the tool is
+  // `image_gen`, relabeled `imagine: <prompt>` with rawInput.variant "ImageGen",
+  // and the completed update reports the file as JSON inside a text block.
+  const completed = {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "call-x",
+    status: "completed",
+    content: [{
+      type: "content",
+      content: {
+        type: "text",
+        text: JSON.stringify({
+          path: "/root/.grok/sessions/%2Ftmp/s/images/1.jpg",
+          filename: "1.jpg",
+          session_folder: "images",
+          message: "Image generated and saved to …",
+        }),
+      },
+    }],
+  };
+
+  it("recognizes the image_gen tool call by title", () => {
+    expect(isImageGenToolCall({ title: "image_gen", rawInput: { prompt: "a cube", aspect_ratio: "1:1" } })).toBe(true);
+    expect(isImageGenToolCall({ title: "imagine: a small red cube" })).toBe(true);
+  });
+
+  it("recognizes the relabeled update by rawInput.variant", () => {
+    expect(isImageGenToolCall({ title: "imagine: x", rawInput: { variant: "ImageGen", prompt: "x" } })).toBe(true);
+  });
+
+  it("does not flag ordinary tools as image gen", () => {
+    expect(isImageGenToolCall({ title: "run_terminal_command", rawInput: { variant: "Bash" } })).toBe(false);
+    expect(isImageGenToolCall(null)).toBe(false);
+  });
+
+  it("extracts the saved image path from the completed JSON-in-text result", () => {
+    expect(extractGeneratedImagePaths(completed)).toEqual([
+      { kind: "path", path: "/root/.grok/sessions/%2Ftmp/s/images/1.jpg" },
+    ]);
+  });
+
+  it("ignores tool-result JSON whose path is not an image", () => {
+    const r = extractGeneratedImagePaths({
+      content: [{ type: "content", content: { type: "text", text: JSON.stringify({ path: "/tmp/out.txt" }) } }],
+    });
+    expect(r).toEqual([]);
+  });
+
+  it("ignores non-JSON and pathless text results", () => {
+    expect(extractGeneratedImagePaths({ content: [{ type: "content", content: { type: "text", text: "done" } }] })).toEqual([]);
+    expect(extractGeneratedImagePaths({ content: [{ type: "content", content: { type: "text", text: '{"ok":true}' } }] })).toEqual([]);
   });
 });

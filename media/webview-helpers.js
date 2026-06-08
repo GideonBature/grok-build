@@ -107,13 +107,14 @@
     return { answers, allAnswered };
   }
 
-  // Recognize a tool call that spawns/runs a subagent, so the webview can give
-  // it a distinct labeled card instead of burying it in the generic tool group.
-  // grok's parallel subagents (`--agents` / Task-style delegation) are a flagship
-  // feature but arrive over ACP as ordinary tool calls. Detection is by tool name
-  // and rawInput shape; it degrades gracefully (no match → today's behavior). The
-  // exact tool name still needs a live subagent run to pin down — see
-  // research/subagents.md — so the matcher is deliberately broad.
+  // Recognize a tool call that spawns a subagent, so the webview can give it a
+  // distinct labeled card instead of burying it in the generic tool group.
+  // grok's parallel subagents are a flagship feature but arrive over ACP as
+  // ordinary tool calls. The tool is `spawn_subagent` with a `subagent_type`
+  // parameter (general-purpose | explore | plan | custom) — confirmed against
+  // grok 0.2.33's bundled docs, see research/subagents.md. The extra name/shape
+  // fallbacks keep it robust to relabelled titles and future renames; it
+  // degrades gracefully (no match → today's behavior).
   function isSubagentToolCall(call) {
     if (!call) return false;
     if (call.kind === "subagent" || call.kind === "agent") return true;
@@ -122,16 +123,17 @@
     if (/subagent|spawnagent|launchagent|dispatchagent|runagent|delegat/.test(n)) return true;
     if (n === "task" || n === "agent" || n === "agents") return true;
     const r = call.rawInput || call.input || {};
-    return !!(r.subagent || r.subagent_type || r.subagentType ||
+    return !!(r.subagent_type || r.subagentType || r.subagent ||
       r.agent_type || r.agentType || r.agent);
   }
 
-  // Human label for a subagent card: the named agent type / description if grok
-  // provided one, else a generic fallback.
+  // Human label for a subagent card: the agent type grok delegated to
+  // (`subagent_type`, e.g. "general-purpose"/"explore"/"plan"), or a description,
+  // else a generic fallback.
   function subagentLabel(call) {
     const r = (call && (call.rawInput || call.input)) || {};
     const name = r.subagent_type || r.subagentType || r.agent_type || r.agentType ||
-      r.subagent || r.agent || r.description || r.name || (call && call.title);
+      r.subagent || r.agent || r.description || r.name;
     const s = name != null ? String(name).trim() : "";
     return s || "Subagent";
   }

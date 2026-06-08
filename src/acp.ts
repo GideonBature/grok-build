@@ -3,6 +3,8 @@ import { createInterface, Interface } from "node:readline";
 import { EventEmitter } from "node:events";
 import {
   collectToolImages,
+  extractGeneratedImagePaths,
+  isImageGenToolCall,
   extractPromptMeta,
   makeAckResponse,
   makeExitPlanResponse,
@@ -133,6 +135,14 @@ export class AcpClient extends EventEmitter {
   availableModels: ModelInfo[] = [];
   availableCommands: SlashCommand[] = [];
   lastMeta?: PromptResultMeta;
+
+  /**
+   * Tool-call ids known to be image generations (`/imagine`). grok's image_gen
+   * tool reports its output as a JSON-in-text path on the *completed* update,
+   * whose title is null — so we remember the id from the initial titled call to
+   * recognize the result. See research/image-generation.md.
+   */
+  private imageGenCallIds = new Set<string>();
 
   /**
    * Client-enforced plan gate. While true, workspace file writes and mutating
@@ -417,12 +427,27 @@ export class AcpClient extends EventEmitter {
     else if (r.event === "imageContent") this.emit("imageContent", r.image);
     else if (r.event === "toolCall") {
       this.emit("toolCall", r.payload);
-      for (const img of collectToolImages(r.payload)) this.emit("imageContent", img);
+      this.emitToolImages(r.payload);
     } else if (r.event === "toolCallUpdate") {
       this.emit("toolCallUpdate", r.payload);
-      for (const img of collectToolImages(r.payload)) this.emit("imageContent", img);
+      this.emitToolImages(r.payload);
     } else if (r.event === "plan") this.emit("plan", r.payload);
     else this.emit("update", r.payload);
+  }
+
+  /**
+   * Emit any images carried by a tool call: ACP-standard image/resource blocks
+   * (`collectToolImages`) plus grok's image_gen path-in-JSON result, which only
+   * the flagged tool-call ids are allowed to produce.
+   */
+  private emitToolImages(payload: any): void {
+    const id = payload?.toolCallId;
+    if (isImageGenToolCall(payload) && typeof id === "string") this.imageGenCallIds.add(id);
+    const imgs = collectToolImages(payload);
+    if (typeof id === "string" && this.imageGenCallIds.has(id)) {
+      imgs.push(...extractGeneratedImagePaths(payload));
+    }
+    for (const img of imgs) this.emit("imageContent", img);
   }
 
   private async handleServerRequest(msg: any): Promise<void> {

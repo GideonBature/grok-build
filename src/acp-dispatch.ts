@@ -120,6 +120,47 @@ export function collectToolImages(payload: any): ImageRef[] {
   return out;
 }
 
+/**
+ * True for grok's image-generation tool call (`/imagine`). The first `tool_call`
+ * is titled `image_gen`; the relabeled update is titled `imagine: <prompt>` and
+ * carries `rawInput.variant === "ImageGen"`. Confirmed against grok 0.2.33 — see
+ * research/image-generation.md. The host tracks these ids so the *completed*
+ * update (whose title is null) can still be recognized.
+ */
+export function isImageGenToolCall(payload: any): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  if (/^(image_gen\b|imagine:)/i.test(String(payload.title ?? ""))) return true;
+  const ri = payload.rawInput;
+  return !!(ri && typeof ri === "object" && typeof ri.variant === "string" &&
+    /imagegen/i.test(ri.variant));
+}
+
+/**
+ * Pull generated-image file paths out of a completed image_gen tool result.
+ * grok does NOT use an ACP image/resource block — it writes the file to the
+ * session dir and reports it as a JSON string inside a `text` content block:
+ * `{"path":"…/images/1.jpg","filename":"1.jpg","session_folder":"images",…}`.
+ * We parse that out and hand back a path ImageRef (the host inlines it). Only
+ * paths with an image extension are accepted, so a non-image JSON result can't
+ * masquerade as one.
+ */
+export function extractGeneratedImagePaths(payload: any): ImageRef[] {
+  const arr = payload?.content;
+  if (!Array.isArray(arr)) return [];
+  const out: ImageRef[] = [];
+  for (const item of arr) {
+    const block = item?.type === "content" ? item.content : item;
+    if (block?.type !== "text" || typeof block.text !== "string") continue;
+    let parsed: any;
+    try { parsed = JSON.parse(block.text); } catch { continue; }
+    const path = parsed?.path;
+    if (typeof path === "string" && IMAGE_EXT_RE.test(path)) {
+      out.push({ kind: "path", path });
+    }
+  }
+  return out;
+}
+
 export function routeSessionUpdate(u: any): UpdateRoute | null {
   if (!u) return null;
   switch (u.sessionUpdate) {

@@ -2,15 +2,15 @@
 
 ## 1.4.0 — unreleased
 
-> Work-in-progress feature branch. Three new CLI surfaces — generated-image rendering, a subagent card, and a Sign-Out action. The image and subagent wire shapes still need a live (subscription-auth) smoke test to confirm; see [PROGRESS-1.4.0.md](PROGRESS-1.4.0.md).
+> Work-in-progress feature branch. Three new CLI surfaces — generated-image rendering, a subagent card, and a Sign-Out action. The image and subagent wire formats were confirmed live against grok 0.2.33 (see [research/image-generation.md](research/image-generation.md), [research/subagents.md](research/subagents.md)); a live `spawn_subagent` payload and the nested-inspector pass are the remaining follow-ups — see [PROGRESS-1.4.0.md](PROGRESS-1.4.0.md).
 
 ### Image generation
 
-- **Generated images render inline.** When Grok produces an image (the subscription-only `/imagine`, or any tool that returns image content), it now shows up as an actual image in the chat instead of a bare tool chip. Image content blocks arrive over ACP either inline as base64, as an embedded resource, or as a `resource_link`/path to the file Grok writes into the session directory; the host normalizes all three (`extractImageContent`/`collectToolImages`), reads any file-path output and inlines it as a `data:` URI (webviews can't load arbitrary disk paths under the CSP), and the webview renders it — click to open the source file. ([src/acp-dispatch.ts](src/acp-dispatch.ts), [src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- **Generated images render inline.** When Grok generates an image (the subscription-only `/imagine`), it now shows up as an actual image in the chat instead of a dead tool chip. The real wire format (confirmed live, [research/image-generation.md](research/image-generation.md)) is not an ACP image block — Grok's **`image_gen`** tool writes the file into the session directory and reports the path as a JSON string inside the completed tool result's text. The host recognizes the `image_gen` call, parses the path out (`isImageGenToolCall`/`extractGeneratedImagePaths`), reads the file and inlines it as a `data:` URI (webviews can't load arbitrary disk paths under the CSP), and the webview renders it — click to open the source file. ACP-standard image/`resource_link` blocks are also handled as a forward-compatible fallback. ([src/acp-dispatch.ts](src/acp-dispatch.ts), [src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
 
 ### Subagents
 
-- **Subagent delegation reads as a distinct card.** Grok's parallel subagents (`--agents` / Task-style delegation) arrive over ACP as ordinary tool calls and used to disappear into the generic "ran N commands" tool group. They now get their own purple-accented **Subagent: \<type\>** card. The detector (`isSubagentToolCall`/`subagentLabel`) is pure and degrades gracefully — anything it doesn't recognize behaves exactly as before. The exact subagent tool name still needs a live run to pin down (the matcher is deliberately broad until then). ([media/webview-helpers.js](media/webview-helpers.js), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- **Subagent delegation reads as a distinct card.** Grok's parallel subagents arrive over ACP as ordinary `spawn_subagent` tool calls and used to disappear into the generic "ran N commands" tool group. They now get their own purple-accented **Subagent: \<type\>** card labeled with the delegated role (`general-purpose`/`explore`/`plan`/custom). The detector (`isSubagentToolCall`/`subagentLabel`, confirmed against the CLI's bundled docs — [research/subagents.md](research/subagents.md)) is pure and degrades gracefully. A real nested inspector (child calls under the parent card) is a follow-up. ([media/webview-helpers.js](media/webview-helpers.js), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
 
 ### Account
 
@@ -18,7 +18,7 @@
 
 ### Tests
 
-- 17 new grok-free tests (354 total): `extractImageContent`/`collectToolImages` across all three ACP image shapes (inline base64, embedded resource blob, file/remote `resource_link`) plus the `agent_message_chunk` image-vs-text routing, and the `isSubagentToolCall`/`subagentLabel` classifier (by tool name, kind, and rawInput shape).
+- 24 new grok-free tests (361 total): the `image_gen` path-in-JSON result extraction (`isImageGenToolCall`/`extractGeneratedImagePaths`) and ACP-standard image fallbacks (`extractImageContent`/`collectToolImages` across inline base64, resource blob, file/remote `resource_link`) plus image-vs-text chunk routing, and the `isSubagentToolCall`/`subagentLabel` classifier including the confirmed `spawn_subagent` + `subagent_type` shape.
 
 ## 1.3.2 — 2026-06-05
 

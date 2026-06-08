@@ -239,6 +239,15 @@ describe("buildQuestionAnswers", () => {
 });
 
 describe("isSubagentToolCall", () => {
+  it("matches grok's confirmed spawn_subagent shape", () => {
+    // Real shape from grok 0.2.33 (research/subagents.md): tool `spawn_subagent`
+    // with a `subagent_type` parameter.
+    expect(isSubagentToolCall({
+      title: "spawn_subagent",
+      rawInput: { subagent_type: "general-purpose", prompt: "investigate" },
+    })).toBe(true);
+  });
+
   it("matches by tool name", () => {
     expect(isSubagentToolCall({ tool: "task" })).toBe(true);
     expect(isSubagentToolCall({ name: "spawn_agent" })).toBe(true);
@@ -266,6 +275,7 @@ describe("isSubagentToolCall", () => {
 
 describe("subagentLabel", () => {
   it("prefers the named agent type", () => {
+    expect(subagentLabel({ title: "spawn_subagent", rawInput: { subagent_type: "general-purpose" } })).toBe("general-purpose");
     expect(subagentLabel({ tool: "task", rawInput: { subagent_type: "tester" } })).toBe("tester");
     expect(subagentLabel({ tool: "task", input: { agentType: "Explore" } })).toBe("Explore");
     expect(subagentLabel({ tool: "task", rawInput: { description: "Fix the build" } })).toBe("Fix the build");
