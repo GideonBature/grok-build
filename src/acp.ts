@@ -2,6 +2,7 @@ import { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, Interface } from "node:readline";
 import { EventEmitter } from "node:events";
 import {
+  collectToolImages,
   extractPromptMeta,
   makeAckResponse,
   makeExitPlanResponse,
@@ -413,9 +414,14 @@ export class AcpClient extends EventEmitter {
     if (r.event === "messageChunk") this.emit("messageChunk", r.text);
     else if (r.event === "userMessageChunk") this.emit("userMessageChunk", r.text);
     else if (r.event === "thoughtChunk") this.emit("thoughtChunk", r.text);
-    else if (r.event === "toolCall") this.emit("toolCall", r.payload);
-    else if (r.event === "toolCallUpdate") this.emit("toolCallUpdate", r.payload);
-    else if (r.event === "plan") this.emit("plan", r.payload);
+    else if (r.event === "imageContent") this.emit("imageContent", r.image);
+    else if (r.event === "toolCall") {
+      this.emit("toolCall", r.payload);
+      for (const img of collectToolImages(r.payload)) this.emit("imageContent", img);
+    } else if (r.event === "toolCallUpdate") {
+      this.emit("toolCallUpdate", r.payload);
+      for (const img of collectToolImages(r.payload)) this.emit("imageContent", img);
+    } else if (r.event === "plan") this.emit("plan", r.payload);
     else this.emit("update", r.payload);
   }
 

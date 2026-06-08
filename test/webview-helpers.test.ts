@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — plain JS module, no types
-import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers } from "../media/webview-helpers.js";
+import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel } from "../media/webview-helpers.js";
 
 describe("looksLikeFileRef", () => {
   it("accepts a bare filename with a known extension", () => {
@@ -235,5 +235,44 @@ describe("buildQuestionAnswers", () => {
   it("handles empty / missing inputs", () => {
     expect(buildQuestionAnswers([], [])).toEqual({ answers: {}, allAnswered: true });
     expect(buildQuestionAnswers(undefined, undefined)).toEqual({ answers: {}, allAnswered: true });
+  });
+});
+
+describe("isSubagentToolCall", () => {
+  it("matches by tool name", () => {
+    expect(isSubagentToolCall({ tool: "task" })).toBe(true);
+    expect(isSubagentToolCall({ name: "spawn_agent" })).toBe(true);
+    expect(isSubagentToolCall({ name: "run_subagent" })).toBe(true);
+    expect(isSubagentToolCall({ title: "Delegate" })).toBe(true);
+  });
+
+  it("matches by kind", () => {
+    expect(isSubagentToolCall({ kind: "subagent" })).toBe(true);
+    expect(isSubagentToolCall({ kind: "agent" })).toBe(true);
+  });
+
+  it("matches by rawInput shape", () => {
+    expect(isSubagentToolCall({ tool: "x", rawInput: { subagent_type: "tester" } })).toBe(true);
+    expect(isSubagentToolCall({ tool: "x", input: { agentType: "reviewer" } })).toBe(true);
+  });
+
+  it("does not match ordinary tools", () => {
+    expect(isSubagentToolCall({ tool: "read_file", kind: "read" })).toBe(false);
+    expect(isSubagentToolCall({ tool: "bash", kind: "execute" })).toBe(false);
+    expect(isSubagentToolCall(null)).toBe(false);
+    expect(isSubagentToolCall({})).toBe(false);
+  });
+});
+
+describe("subagentLabel", () => {
+  it("prefers the named agent type", () => {
+    expect(subagentLabel({ tool: "task", rawInput: { subagent_type: "tester" } })).toBe("tester");
+    expect(subagentLabel({ tool: "task", input: { agentType: "Explore" } })).toBe("Explore");
+    expect(subagentLabel({ tool: "task", rawInput: { description: "Fix the build" } })).toBe("Fix the build");
+  });
+
+  it("falls back to a generic label", () => {
+    expect(subagentLabel({ tool: "task" })).toBe("Subagent");
+    expect(subagentLabel(null)).toBe("Subagent");
   });
 });

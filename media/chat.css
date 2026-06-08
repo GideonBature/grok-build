@@ -346,6 +346,34 @@ code {
   font-family: var(--vscode-editor-font-family);
 }
 
+/* Generated images (grok /imagine etc.) */
+.generated-image {
+  margin: 6px var(--pad);
+}
+.generated-image img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+  display: block;
+}
+
+/* Subagent delegation card */
+.subagent-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  padding: 5px 10px;
+  margin: 4px var(--pad);
+  border-left: 2px solid var(--vscode-charts-purple, #b180d7);
+  background: var(--vscode-textBlockQuote-background, rgba(177, 128, 215, 0.08));
+}
+.subagent-card .subagent-label {
+  font-weight: 600;
+}
+
 .tool-group {
   font-size: 11px;
 }

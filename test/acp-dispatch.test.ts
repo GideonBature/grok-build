@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  collectToolImages,
+  extractImageContent,
   extractPromptMeta,
   isIncompatibleAgentError,
   makeAckResponse,
@@ -262,5 +264,85 @@ describe("isIncompatibleAgentError", () => {
     expect(isIncompatibleAgentError({ data: { code: "SOMETHING_ELSE" } })).toBe(false);
     expect(isIncompatibleAgentError(undefined)).toBe(false);
     expect(isIncompatibleAgentError(new Error("network timeout"))).toBe(false);
+  });
+});
+
+describe("extractImageContent", () => {
+  it("pulls an inline base64 image block", () => {
+    expect(extractImageContent({ type: "image", data: "AAAA", mimeType: "image/jpeg" }))
+      .toEqual({ kind: "data", mimeType: "image/jpeg", data: "AAAA" });
+  });
+
+  it("defaults the mime when an image block omits it", () => {
+    expect(extractImageContent({ type: "image", data: "AAAA" }))
+      .toEqual({ kind: "data", mimeType: "image/png", data: "AAAA" });
+  });
+
+  it("pulls an embedded resource blob", () => {
+    expect(extractImageContent({
+      type: "resource",
+      resource: { uri: "file:///x/out.png", mimeType: "image/png", blob: "ZZZZ" },
+    })).toEqual({ kind: "data", mimeType: "image/png", data: "ZZZZ" });
+  });
+
+  it("maps a file:// resource_link to a path", () => {
+    expect(extractImageContent({
+      type: "resource_link",
+      uri: "file:///home/u/.grok/sessions/s/out.png",
+    })).toEqual({ kind: "path", path: "/home/u/.grok/sessions/s/out.png", mimeType: undefined });
+  });
+
+  it("maps a bare absolute path resource_link to a path", () => {
+    expect(extractImageContent({ type: "resource_link", uri: "/tmp/out.webp" }))
+      .toEqual({ kind: "path", path: "/tmp/out.webp", mimeType: undefined });
+  });
+
+  it("maps a remote https image to a uri", () => {
+    expect(extractImageContent({ type: "resource_link", uri: "https://x.ai/a.jpg" }))
+      .toEqual({ kind: "uri", uri: "https://x.ai/a.jpg", mimeType: undefined });
+  });
+
+  it("ignores text and non-image content", () => {
+    expect(extractImageContent({ type: "text", text: "hi" })).toBeNull();
+    expect(extractImageContent({ type: "resource_link", uri: "file:///x/notes.md" })).toBeNull();
+    expect(extractImageContent(null)).toBeNull();
+  });
+});
+
+describe("collectToolImages", () => {
+  it("collects images from wrapped and bare content items", () => {
+    const imgs = collectToolImages({
+      content: [
+        { type: "content", content: { type: "image", data: "AA", mimeType: "image/png" } },
+        { type: "text", text: "done" },
+        { type: "resource_link", uri: "/tmp/a.gif" },
+      ],
+    });
+    expect(imgs).toHaveLength(2);
+    expect(imgs[0]).toEqual({ kind: "data", mimeType: "image/png", data: "AA" });
+    expect(imgs[1]).toEqual({ kind: "path", path: "/tmp/a.gif", mimeType: undefined });
+  });
+
+  it("returns [] when there is no content array", () => {
+    expect(collectToolImages({})).toEqual([]);
+    expect(collectToolImages({ content: "nope" })).toEqual([]);
+  });
+});
+
+describe("routeSessionUpdate image chunks", () => {
+  it("routes an agent_message_chunk image block to imageContent", () => {
+    const r = routeSessionUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "image", data: "AA", mimeType: "image/png" },
+    });
+    expect(r).toEqual({ event: "imageContent", image: { kind: "data", mimeType: "image/png", data: "AA" } });
+  });
+
+  it("still routes text chunks as messageChunk", () => {
+    const r = routeSessionUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "hello" },
+    });
+    expect(r).toEqual({ event: "messageChunk", text: "hello" });
   });
 });

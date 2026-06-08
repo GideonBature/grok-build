@@ -32,10 +32,22 @@ export function parseAcpLine(line: string): DispatchEvent | null {
   return null;
 }
 
+/**
+ * A generated-image reference normalized out of an ACP content block. `data` is
+ * base64 with an inline `mimeType` (renders straight to a data: URI); `path` is
+ * a local file (grok writes `/imagine` output into the session dir — the host
+ * reads + inlines it); `uri` is a remote/other URL the webview opens as a link.
+ */
+export type ImageRef =
+  | { kind: "data"; mimeType: string; data: string }
+  | { kind: "path"; path: string; mimeType?: string }
+  | { kind: "uri"; uri: string; mimeType?: string };
+
 export type UpdateRoute =
   | { event: "messageChunk"; text: string }
   | { event: "userMessageChunk"; text: string }
   | { event: "thoughtChunk"; text: string }
+  | { event: "imageContent"; image: ImageRef }
   | { event: "toolCall"; payload: any }
   | { event: "toolCallUpdate"; payload: any }
   | { event: "plan"; payload: any }
@@ -43,11 +55,82 @@ export type UpdateRoute =
   | { event: "commandsUpdate"; commands: any[] }
   | { event: "update"; payload: any };
 
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+
+function isImageMime(m: unknown): boolean {
+  return typeof m === "string" && m.toLowerCase().startsWith("image/");
+}
+
+/** Normalize a file://-or-path URI to a {kind:"path"|"uri"} ImageRef. */
+function refFromUri(uri: string, mimeType?: string): ImageRef {
+  if (uri.startsWith("file://")) {
+    try {
+      return { kind: "path", path: decodeURIComponent(new URL(uri).pathname), mimeType };
+    } catch {
+      return { kind: "path", path: uri.replace(/^file:\/\//, ""), mimeType };
+    }
+  }
+  if (/^[a-z]+:\/\//i.test(uri)) return { kind: "uri", uri, mimeType };
+  // Bare filesystem path (absolute or relative).
+  return { kind: "path", path: uri, mimeType };
+}
+
+/**
+ * Pull an image out of a single ACP content block, or null if it isn't one.
+ * Covers the three shapes grok could use for `/imagine` output: an inline
+ * `image` block (base64), an embedded `resource` (blob or uri), and a
+ * `resource_link` to the written-out file. Verified shapes live in
+ * research/image-generation.md — the routing is deliberately permissive so a
+ * subscription smoke test only has to confirm which one fires.
+ */
+export function extractImageContent(block: any): ImageRef | null {
+  if (!block || typeof block !== "object") return null;
+  if (block.type === "image" && typeof block.data === "string") {
+    return { kind: "data", mimeType: block.mimeType || "image/png", data: block.data };
+  }
+  if (block.type === "resource" && block.resource && typeof block.resource === "object") {
+    const r = block.resource;
+    if (typeof r.blob === "string" && (isImageMime(r.mimeType) || IMAGE_EXT_RE.test(String(r.uri ?? "")))) {
+      return { kind: "data", mimeType: isImageMime(r.mimeType) ? r.mimeType : "image/png", data: r.blob };
+    }
+    if (typeof r.uri === "string" && (isImageMime(r.mimeType) || IMAGE_EXT_RE.test(r.uri))) {
+      return refFromUri(r.uri, isImageMime(r.mimeType) ? r.mimeType : undefined);
+    }
+  }
+  if (block.type === "resource_link" && typeof block.uri === "string" &&
+      (isImageMime(block.mimeType) || IMAGE_EXT_RE.test(block.uri))) {
+    return refFromUri(block.uri, isImageMime(block.mimeType) ? block.mimeType : undefined);
+  }
+  return null;
+}
+
+/**
+ * Collect every image out of a tool call's `content` array. Items are either a
+ * bare content block or the ACP `{type:"content", content:<block>}` wrapper —
+ * grok attaches generated images to the tool result this way.
+ */
+export function collectToolImages(payload: any): ImageRef[] {
+  const arr = payload?.content;
+  if (!Array.isArray(arr)) return [];
+  const out: ImageRef[] = [];
+  for (const item of arr) {
+    const ref = extractImageContent(item?.type === "content" ? item.content : item);
+    if (ref) out.push(ref);
+  }
+  return out;
+}
+
 export function routeSessionUpdate(u: any): UpdateRoute | null {
   if (!u) return null;
   switch (u.sessionUpdate) {
-    case "agent_message_chunk":
-      return { event: "messageChunk", text: u.content?.text ?? "" };
+    case "agent_message_chunk": {
+      const c = u.content;
+      if (c && c.type && c.type !== "text") {
+        const img = extractImageContent(c);
+        if (img) return { event: "imageContent", image: img };
+      }
+      return { event: "messageChunk", text: c?.text ?? "" };
+    }
     case "user_message_chunk":
       return { event: "userMessageChunk", text: u.content?.text ?? "" };
     case "agent_thought_chunk":

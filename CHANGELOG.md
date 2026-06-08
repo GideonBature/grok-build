@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.4.0 — unreleased
+
+> Work-in-progress feature branch. Three new CLI surfaces — generated-image rendering, a subagent card, and a Sign-Out action. The image and subagent wire shapes still need a live (subscription-auth) smoke test to confirm; see [PROGRESS-1.4.0.md](PROGRESS-1.4.0.md).
+
+### Image generation
+
+- **Generated images render inline.** When Grok produces an image (the subscription-only `/imagine`, or any tool that returns image content), it now shows up as an actual image in the chat instead of a bare tool chip. Image content blocks arrive over ACP either inline as base64, as an embedded resource, or as a `resource_link`/path to the file Grok writes into the session directory; the host normalizes all three (`extractImageContent`/`collectToolImages`), reads any file-path output and inlines it as a `data:` URI (webviews can't load arbitrary disk paths under the CSP), and the webview renders it — click to open the source file. ([src/acp-dispatch.ts](src/acp-dispatch.ts), [src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+
+### Subagents
+
+- **Subagent delegation reads as a distinct card.** Grok's parallel subagents (`--agents` / Task-style delegation) arrive over ACP as ordinary tool calls and used to disappear into the generic "ran N commands" tool group. They now get their own purple-accented **Subagent: \<type\>** card. The detector (`isSubagentToolCall`/`subagentLabel`) is pure and degrades gracefully — anything it doesn't recognize behaves exactly as before. The exact subagent tool name still needs a live run to pin down (the matcher is deliberately broad until then). ([media/webview-helpers.js](media/webview-helpers.js), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+
+### Account
+
+- **Sign out from the extension (#13).** New `Grok: Log Out` command (palette) and a **Sign out** item in the gear menu run `grok logout` to clear the CLI's cached credentials, tear down the live session, and drop back to the auth-required onboarding screen — no more switching to a terminal to change xAI accounts. ([src/sidebar.ts](src/sidebar.ts), [src/extension.ts](src/extension.ts), [package.json](package.json), [media/chat.js](media/chat.js))
+
+### Tests
+
+- 17 new grok-free tests (354 total): `extractImageContent`/`collectToolImages` across all three ACP image shapes (inline base64, embedded resource blob, file/remote `resource_link`) plus the `agent_message_chunk` image-vs-text routing, and the `isSubagentToolCall`/`subagentLabel` classifier (by tool name, kind, and rawInput shape).
+
 ## 1.3.2 — 2026-06-05
 
 - **Refreshed the Marketplace screenshot.** Updated the "alongside VS Code" README image to `v1.3.1_vscode.png` so the listing reflects the current UI. No code changes. ([README.md](README.md))

@@ -6,7 +6,7 @@ import { AcpClient, EffortLevel, ExitPlanRequest, PermissionRequest, QuestionReq
 import { resolveVoiceKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice";
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
-import { isIncompatibleAgentError } from "./acp-dispatch";
+import { ImageRef, isIncompatibleAgentError } from "./acp-dispatch";
 import { locateGrokCli } from "./cli-locator";
 import { TerminalManager } from "./terminal-manager";
 import {
@@ -58,6 +58,7 @@ type WebviewMsg =
   | { type: "setModel"; modelId: string }
   | { type: "runInstallCmd" }
   | { type: "runGrokLogin" }
+  | { type: "logout" }
   | { type: "recheckConnection" }
   | { type: "listSessions" }
   | { type: "resumeSession"; id: string }
@@ -74,6 +75,20 @@ const SESSION_META_KEY = "grok.sessionMeta";
 // see research/plan-mode.md). The UI labels it "Agent"; the wire calls it
 // "default".
 const ACT_MODE_ID = "default";
+
+/** Best-effort MIME from a file extension, for inlining generated images. */
+function guessImageMime(p: string): string {
+  const ext = p.toLowerCase().split(".").pop() ?? "";
+  switch (ext) {
+    case "jpg":
+    case "jpeg": return "image/jpeg";
+    case "gif": return "image/gif";
+    case "webp": return "image/webp";
+    case "bmp": return "image/bmp";
+    case "svg": return "image/svg+xml";
+    default: return "image/png";
+  }
+}
 
 export class GrokSidebar implements vscode.WebviewViewProvider {
   public static readonly viewId = "grok.chat";
@@ -535,6 +550,65 @@ See design doc for the full state machine diagram.`;
     await fn();
   }
 
+  /**
+   * Forward a generated image (from grok's `/imagine` / image tools) to the
+   * webview. The webview can only load `data:` URIs and remote URLs (CSP +
+   * localResourceRoots), so file paths — which is how grok writes `/imagine`
+   * output into the session dir — are read here and inlined as base64. Remote
+   * URLs are passed through as a link. Best-effort: a read failure just drops
+   * the image rather than breaking the turn.
+   */
+  private async postGeneratedImage(img: ImageRef, gen: number): Promise<void> {
+    try {
+      if (img.kind === "data") {
+        this.post({ type: "image", src: `data:${img.mimeType};base64,${img.data}` });
+        return;
+      }
+      if (img.kind === "uri") {
+        this.post({ type: "image", url: img.uri });
+        return;
+      }
+      // path: inline the file so it renders regardless of where grok wrote it.
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(img.path));
+      if (gen !== this.sessionGen) return;
+      const mime = img.mimeType || guessImageMime(img.path);
+      const b64 = Buffer.from(bytes).toString("base64");
+      this.post({ type: "image", src: `data:${mime};base64,${b64}`, path: img.path });
+    } catch (e) {
+      this.output.appendLine(`[image] failed to forward generated image: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Sign out of the Grok CLI (`grok logout` — clears `~/.grok/auth.json`). The
+   * CLI owns auth, so we shell out to it, tear down the live session, and drop
+   * the webview back to the auth-required onboarding state. Resolves issue #13.
+   */
+  async logout(): Promise<void> {
+    const cliPath = this.cliPath || locateGrokCli(
+      vscode.workspace.getConfiguration("grok").get<string>("cliPath", ""),
+    );
+    if (!cliPath) {
+      this.post({ type: "onboarding", state: "missing-cli", platform: process.platform });
+      return;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      "Sign out of Grok? This clears the CLI's cached credentials.",
+      { modal: true },
+      "Sign Out",
+    );
+    if (choice !== "Sign Out") return;
+    // Bump the generation + dispose the client first so its `exit` (and any
+    // in-flight turn) doesn't race the onboarding state we're about to show.
+    this.sessionGen++;
+    this.client?.dispose();
+    this.client = undefined;
+    const term = vscode.window.createTerminal("Grok Logout");
+    term.sendText(`"${cliPath}" logout`);
+    this.post({ type: "clearMessages" });
+    this.post({ type: "onboarding", state: "auth-required" });
+  }
+
   dispose(): void {
     this.client?.dispose();
     this.editorWatcher?.dispose();
@@ -747,6 +821,10 @@ See design doc for the full state machine diagram.`;
       if (gen !== this.sessionGen) return;
       this.inUserMessage = false;
       this.post({ type: "thoughtChunk", text });
+    });
+    client.on("imageContent", (img: ImageRef) => {
+      if (gen !== this.sessionGen) return;
+      void this.postGeneratedImage(img, gen);
     });
     client.on("toolCall", (u) => {
       if (gen !== this.sessionGen) return;
@@ -1081,6 +1159,9 @@ See design doc for the full state machine diagram.`;
       }
       case "recheckConnection":
         await this.startSession();
+        break;
+      case "logout":
+        await this.logout();
         break;
       case "listSessions":
         this.postSessionsList();

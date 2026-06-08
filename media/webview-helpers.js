@@ -107,7 +107,36 @@
     return { answers, allAnswered };
   }
 
-  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers };
+  // Recognize a tool call that spawns/runs a subagent, so the webview can give
+  // it a distinct labeled card instead of burying it in the generic tool group.
+  // grok's parallel subagents (`--agents` / Task-style delegation) are a flagship
+  // feature but arrive over ACP as ordinary tool calls. Detection is by tool name
+  // and rawInput shape; it degrades gracefully (no match → today's behavior). The
+  // exact tool name still needs a live subagent run to pin down — see
+  // research/subagents.md — so the matcher is deliberately broad.
+  function isSubagentToolCall(call) {
+    if (!call) return false;
+    if (call.kind === "subagent" || call.kind === "agent") return true;
+    const n = String(call.tool || call.name || call.title || "")
+      .replace(/[_\s-]/g, "").toLowerCase();
+    if (/subagent|spawnagent|launchagent|dispatchagent|runagent|delegat/.test(n)) return true;
+    if (n === "task" || n === "agent" || n === "agents") return true;
+    const r = call.rawInput || call.input || {};
+    return !!(r.subagent || r.subagent_type || r.subagentType ||
+      r.agent_type || r.agentType || r.agent);
+  }
+
+  // Human label for a subagent card: the named agent type / description if grok
+  // provided one, else a generic fallback.
+  function subagentLabel(call) {
+    const r = (call && (call.rawInput || call.input)) || {};
+    const name = r.subagent_type || r.subagentType || r.agent_type || r.agentType ||
+      r.subagent || r.agent || r.description || r.name || (call && call.title);
+    const s = name != null ? String(name).trim() : "";
+    return s || "Subagent";
+  }
+
+  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {

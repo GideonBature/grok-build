@@ -227,7 +227,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel } = globalThis.GrokWebviewHelpers;
 
   function renderDiffCode(code) {
     const lines = code.replace(/\n+$/, "").split("\n");
@@ -564,6 +564,13 @@
     });
     addGearItem('<span>MCP servers</span><span class="popover-external">↗</span>', () => {
       vscode.postMessage({ type: "runMcpList" });
+      closePopovers();
+    });
+
+    // ── Account ───────────────────────────────────────────────────────────
+    addSection("Account");
+    addGearItem("<span>Sign out</span>", () => {
+      vscode.postMessage({ type: "logout" });
       closePopovers();
     });
 
@@ -1156,6 +1163,54 @@
     const el = document.createElement("div");
     el.className = "msg error";
     el.textContent = text;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  // Render a generated image (grok `/imagine` etc.). The host has already
+  // inlined file-path output as a data: URI; `url` is a remote link we open
+  // externally. Clicking an inlined image opens its source file in VS Code.
+  function addGeneratedImage(msg) {
+    if (state.suppressReplayTurn) return;
+    closeToolGroup();
+    clearWelcome();
+    const el = document.createElement("div");
+    el.className = "generated-image";
+    if (msg.src) {
+      const img = document.createElement("img");
+      img.src = msg.src;
+      img.alt = "Generated image";
+      img.loading = "lazy";
+      if (msg.path) {
+        img.title = "Open " + msg.path;
+        img.style.cursor = "pointer";
+        img.onclick = () => vscode.postMessage({ type: "openFile", path: msg.path });
+      }
+      el.appendChild(img);
+    } else if (msg.url) {
+      const link = document.createElement("button");
+      link.className = "preview-link";
+      link.textContent = "open generated image ↗";
+      link.onclick = () => vscode.postMessage({ type: "openUrl", url: msg.url });
+      el.appendChild(link);
+    }
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  // Distinct card for a subagent tool call (grok's parallel-subagent feature),
+  // so delegated work reads as "Subagent: <type>" instead of disappearing into
+  // the generic tool group. Collapsed scaffold — child-call nesting awaits a
+  // probe of the live subagent wire shape (research/subagents.md).
+  function addSubagentCard(call) {
+    closeToolGroup();
+    clearWelcome();
+    const el = document.createElement("div");
+    el.className = "subagent-card";
+    const label = escapeHtml(subagentLabel(call));
+    el.innerHTML =
+      `<span class="subagent-badge">${ICON.listTree || "🤖"}</span>` +
+      `<span class="subagent-label">Subagent: ${label}</span>`;
     messagesEl.appendChild(el);
     scrollToBottom();
   }
@@ -2178,6 +2233,9 @@
       case "messageChunk":
         appendAgent(msg.text);
         break;
+      case "image":
+        addGeneratedImage(msg);
+        break;
       case "userMessageChunk":
         appendUserChunk(msg.text);
         break;
@@ -2219,6 +2277,10 @@
             // so the matching update is recognized (and the chip stays suppressed).
             state.questionToolCalls.set(msg.call.toolCallId, { questions: questionsFromCall(msg.call) || [] });
           }
+          break;
+        }
+        if (isSubagentToolCall(msg.call)) {
+          addSubagentCard(msg.call);
           break;
         }
         addToToolGroup(msg.call);
