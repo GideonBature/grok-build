@@ -2,11 +2,11 @@
 
 ## 1.4.0 — unreleased
 
-> Work-in-progress feature branch. Three new CLI surfaces — generated-image rendering, a subagent card, and a Sign-Out action. The image and subagent wire formats were confirmed live against grok 0.2.33 (see [research/image-generation.md](research/image-generation.md), [research/subagents.md](research/subagents.md)); a live `spawn_subagent` payload and the nested-inspector pass are the remaining follow-ups — see [PROGRESS-1.4.0.md](PROGRESS-1.4.0.md).
+> Work-in-progress feature branch. Three new CLI surfaces — generated image/video rendering, a subagent card, and a Sign-Out action. The media and subagent wire formats were confirmed live against grok 0.2.33 (see [research/image-generation.md](research/image-generation.md), [research/subagents.md](research/subagents.md)); a live `spawn_subagent` payload and the nested-inspector pass are the remaining follow-ups — see [PROGRESS-1.4.0.md](PROGRESS-1.4.0.md).
 
-### Image generation
+### Image & video generation
 
-- **Generated images render inline.** When Grok generates an image (the subscription-only `/imagine`), it now shows up as an actual image in the chat instead of a dead tool chip. The real wire format (confirmed live, [research/image-generation.md](research/image-generation.md)) is not an ACP image block — Grok's **`image_gen`** tool writes the file into the session directory and reports the path as a JSON string inside the completed tool result's text. The host recognizes the `image_gen` call, parses the path out (`isImageGenToolCall`/`extractGeneratedImagePaths`), reads the file and inlines it as a `data:` URI (webviews can't load arbitrary disk paths under the CSP), and the webview renders it — click to open the source file. ACP-standard image/`resource_link` blocks are also handled as a forward-compatible fallback. ([src/acp-dispatch.ts](src/acp-dispatch.ts), [src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- **Generated images and videos render inline.** When Grok generates an image (the subscription-only `/imagine`) or a video (`/imagine-video`), it now shows up as an actual image or a playable `<video>` in the chat instead of a dead tool chip. The real wire format (confirmed live, [research/image-generation.md](research/image-generation.md)) is **not** an ACP image block — Grok's **`image_gen`** / **`image_to_video`** tools write the file into the session directory (`images/*.jpg`, `videos/*.mp4`) and report the path as a JSON string inside the completed tool result's text. The host recognizes the media-gen call, parses the path out and classifies image-vs-video by extension (`isMediaGenToolCall`/`extractGeneratedMediaPaths`), reads the file and inlines it as a `data:` URI (webviews can't load arbitrary disk paths under the CSP — `media-src data:` was added for video), and the webview renders it — click an image to open the source file; videos get native playback controls. ACP-standard image/`resource_link` blocks are also handled as a forward-compatible fallback. Both render identically on **session resume** (Grok replays the generation as a single collapsed `tool_call`). ([src/acp-dispatch.ts](src/acp-dispatch.ts), [src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
 
 ### Subagents
 
@@ -18,7 +18,7 @@
 
 ### Tests
 
-- 24 new grok-free tests (361 total): the `image_gen` path-in-JSON result extraction (`isImageGenToolCall`/`extractGeneratedImagePaths`) and ACP-standard image fallbacks (`extractImageContent`/`collectToolImages` across inline base64, resource blob, file/remote `resource_link`) plus image-vs-text chunk routing, and the `isSubagentToolCall`/`subagentLabel` classifier including the confirmed `spawn_subagent` + `subagent_type` shape.
+- 26 new grok-free tests (363 total): the `image_gen`/`image_to_video` path-in-JSON result extraction (`isMediaGenToolCall`/`extractGeneratedMediaPaths`, classifying image vs video and covering the collapsed-resume shape) and ACP-standard image fallbacks (`extractImageContent`/`collectToolImages` across inline base64, resource blob, file/remote `resource_link`) plus image-vs-text chunk routing, and the `isSubagentToolCall`/`subagentLabel` classifier including the confirmed `spawn_subagent` + `subagent_type` shape.
 
 ## 1.3.2 — 2026-06-05
 

@@ -6,7 +6,7 @@ import { AcpClient, EffortLevel, ExitPlanRequest, PermissionRequest, QuestionReq
 import { resolveVoiceKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice";
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
-import { ImageRef, isIncompatibleAgentError } from "./acp-dispatch";
+import { MediaRef, isIncompatibleAgentError } from "./acp-dispatch";
 import { locateGrokCli } from "./cli-locator";
 import { TerminalManager } from "./terminal-manager";
 import {
@@ -76,8 +76,8 @@ const SESSION_META_KEY = "grok.sessionMeta";
 // "default".
 const ACT_MODE_ID = "default";
 
-/** Best-effort MIME from a file extension, for inlining generated images. */
-function guessImageMime(p: string): string {
+/** Best-effort MIME from a file extension, for inlining generated media. */
+function guessMediaMime(p: string): string {
   const ext = p.toLowerCase().split(".").pop() ?? "";
   switch (ext) {
     case "jpg":
@@ -86,6 +86,10 @@ function guessImageMime(p: string): string {
     case "webp": return "image/webp";
     case "bmp": return "image/bmp";
     case "svg": return "image/svg+xml";
+    case "mp4":
+    case "m4v": return "video/mp4";
+    case "mov": return "video/quicktime";
+    case "webm": return "video/webm";
     default: return "image/png";
   }
 }
@@ -551,31 +555,31 @@ See design doc for the full state machine diagram.`;
   }
 
   /**
-   * Forward a generated image (from grok's `/imagine` / image tools) to the
-   * webview. The webview can only load `data:` URIs and remote URLs (CSP +
-   * localResourceRoots), so file paths — which is how grok writes `/imagine`
-   * output into the session dir — are read here and inlined as base64. Remote
-   * URLs are passed through as a link. Best-effort: a read failure just drops
-   * the image rather than breaking the turn.
+   * Forward generated media (grok's `/imagine` image or `/imagine-video` video)
+   * to the webview. The webview can only load `data:` URIs and remote URLs (CSP +
+   * localResourceRoots), so file paths — which is how grok writes media into the
+   * session dir — are read here and inlined as base64. Remote URLs pass through
+   * as a link. Best-effort: a read failure just drops the media rather than
+   * breaking the turn.
    */
-  private async postGeneratedImage(img: ImageRef, gen: number): Promise<void> {
+  private async postGeneratedMedia(m: MediaRef, gen: number): Promise<void> {
     try {
-      if (img.kind === "data") {
-        this.post({ type: "image", src: `data:${img.mimeType};base64,${img.data}` });
+      if (m.kind === "data") {
+        this.post({ type: "media", media: m.media, src: `data:${m.mimeType};base64,${m.data}` });
         return;
       }
-      if (img.kind === "uri") {
-        this.post({ type: "image", url: img.uri });
+      if (m.kind === "uri") {
+        this.post({ type: "media", media: m.media, url: m.uri });
         return;
       }
       // path: inline the file so it renders regardless of where grok wrote it.
-      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(img.path));
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(m.path));
       if (gen !== this.sessionGen) return;
-      const mime = img.mimeType || guessImageMime(img.path);
+      const mime = m.mimeType || guessMediaMime(m.path);
       const b64 = Buffer.from(bytes).toString("base64");
-      this.post({ type: "image", src: `data:${mime};base64,${b64}`, path: img.path });
+      this.post({ type: "media", media: m.media, src: `data:${mime};base64,${b64}`, path: m.path });
     } catch (e) {
-      this.output.appendLine(`[image] failed to forward generated image: ${(e as Error).message}`);
+      this.output.appendLine(`[media] failed to forward generated media: ${(e as Error).message}`);
     }
   }
 
@@ -822,9 +826,9 @@ See design doc for the full state machine diagram.`;
       this.inUserMessage = false;
       this.post({ type: "thoughtChunk", text });
     });
-    client.on("imageContent", (img: ImageRef) => {
+    client.on("mediaContent", (m: MediaRef) => {
       if (gen !== this.sessionGen) return;
-      void this.postGeneratedImage(img, gen);
+      void this.postGeneratedMedia(m, gen);
     });
     client.on("toolCall", (u) => {
       if (gen !== this.sessionGen) return;
@@ -1799,7 +1803,7 @@ See design doc for the full state machine diagram.`;
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';" />
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; media-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';" />
 <link rel="stylesheet" href="${mediaUri("chat.css")}" />
 </head>
 <body>

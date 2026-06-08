@@ -31,6 +31,8 @@ Present in subscription mode, not on API-key auth.
 | `/imagine` | Generate an image from a text description |
 | `/imagine-video` | Generate a video from a text description |
 
+Since v1.4.0 the extension **renders the result inline** — `/imagine` output shows as an image (click to open the source file), `/imagine-video` as a playable `<video>`. Grok writes the file into its session directory and the extension reads + inlines it; see [research/image-generation.md](../research/image-generation.md) for the wire format.
+
 ## Not slash commands
 
 A few things look like slash commands but are surfaced through the extension UI, not the CLI:

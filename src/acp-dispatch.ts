@@ -33,21 +33,23 @@ export function parseAcpLine(line: string): DispatchEvent | null {
 }
 
 /**
- * A generated-image reference normalized out of an ACP content block. `data` is
- * base64 with an inline `mimeType` (renders straight to a data: URI); `path` is
- * a local file (grok writes `/imagine` output into the session dir — the host
- * reads + inlines it); `uri` is a remote/other URL the webview opens as a link.
+ * A generated-media reference (image or video) normalized out of a tool result.
+ * `media` discriminates `<img>` vs `<video>` rendering. `data` is base64 with an
+ * inline `mimeType` (renders straight to a data: URI); `path` is a local file
+ * (grok writes `/imagine` + `/imagine-video` output into the session dir — the
+ * host reads + inlines it); `uri` is a remote/other URL opened as a link.
  */
-export type ImageRef =
-  | { kind: "data"; mimeType: string; data: string }
-  | { kind: "path"; path: string; mimeType?: string }
-  | { kind: "uri"; uri: string; mimeType?: string };
+export type MediaKind = "image" | "video";
+export type MediaRef =
+  | { media: MediaKind; kind: "data"; mimeType: string; data: string }
+  | { media: MediaKind; kind: "path"; path: string; mimeType?: string }
+  | { media: MediaKind; kind: "uri"; uri: string; mimeType?: string };
 
 export type UpdateRoute =
   | { event: "messageChunk"; text: string }
   | { event: "userMessageChunk"; text: string }
   | { event: "thoughtChunk"; text: string }
-  | { event: "imageContent"; image: ImageRef }
+  | { event: "mediaContent"; media: MediaRef }
   | { event: "toolCall"; payload: any }
   | { event: "toolCallUpdate"; payload: any }
   | { event: "plan"; payload: any }
@@ -56,63 +58,71 @@ export type UpdateRoute =
   | { event: "update"; payload: any };
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+const VIDEO_EXT_RE = /\.(mp4|mov|webm|m4v)$/i;
 
 function isImageMime(m: unknown): boolean {
   return typeof m === "string" && m.toLowerCase().startsWith("image/");
 }
 
-/** Normalize a file://-or-path URI to a {kind:"path"|"uri"} ImageRef. */
-function refFromUri(uri: string, mimeType?: string): ImageRef {
+/** Classify a file path/uri as image or video by extension, or null. */
+function mediaKindForPath(p: string): MediaKind | null {
+  if (IMAGE_EXT_RE.test(p)) return "image";
+  if (VIDEO_EXT_RE.test(p)) return "video";
+  return null;
+}
+
+/** Normalize a file://-or-path URI to a {kind:"path"|"uri"} MediaRef. */
+function refFromUri(media: MediaKind, uri: string, mimeType?: string): MediaRef {
   if (uri.startsWith("file://")) {
     try {
-      return { kind: "path", path: decodeURIComponent(new URL(uri).pathname), mimeType };
+      return { media, kind: "path", path: decodeURIComponent(new URL(uri).pathname), mimeType };
     } catch {
-      return { kind: "path", path: uri.replace(/^file:\/\//, ""), mimeType };
+      return { media, kind: "path", path: uri.replace(/^file:\/\//, ""), mimeType };
     }
   }
-  if (/^[a-z]+:\/\//i.test(uri)) return { kind: "uri", uri, mimeType };
+  if (/^[a-z]+:\/\//i.test(uri)) return { media, kind: "uri", uri, mimeType };
   // Bare filesystem path (absolute or relative).
-  return { kind: "path", path: uri, mimeType };
+  return { media, kind: "path", path: uri, mimeType };
 }
 
 /**
  * Pull an image out of a single ACP content block, or null if it isn't one.
- * Covers the three shapes grok could use for `/imagine` output: an inline
- * `image` block (base64), an embedded `resource` (blob or uri), and a
- * `resource_link` to the written-out file. Verified shapes live in
- * research/image-generation.md — the routing is deliberately permissive so a
- * subscription smoke test only has to confirm which one fires.
+ * grok's `/imagine` doesn't actually use these (it reports a path — see
+ * `extractGeneratedMediaPaths`); this is kept as a forward-compatible fallback
+ * for the standard ACP `image` block, embedded `resource`, and `resource_link`
+ * shapes in case a future grok/tool emits them.
  */
-export function extractImageContent(block: any): ImageRef | null {
+export function extractImageContent(block: any): MediaRef | null {
   if (!block || typeof block !== "object") return null;
   if (block.type === "image" && typeof block.data === "string") {
-    return { kind: "data", mimeType: block.mimeType || "image/png", data: block.data };
+    return { media: "image", kind: "data", mimeType: block.mimeType || "image/png", data: block.data };
   }
   if (block.type === "resource" && block.resource && typeof block.resource === "object") {
     const r = block.resource;
     if (typeof r.blob === "string" && (isImageMime(r.mimeType) || IMAGE_EXT_RE.test(String(r.uri ?? "")))) {
-      return { kind: "data", mimeType: isImageMime(r.mimeType) ? r.mimeType : "image/png", data: r.blob };
+      return { media: "image", kind: "data", mimeType: isImageMime(r.mimeType) ? r.mimeType : "image/png", data: r.blob };
     }
     if (typeof r.uri === "string" && (isImageMime(r.mimeType) || IMAGE_EXT_RE.test(r.uri))) {
-      return refFromUri(r.uri, isImageMime(r.mimeType) ? r.mimeType : undefined);
+      return refFromUri("image", r.uri, isImageMime(r.mimeType) ? r.mimeType : undefined);
     }
   }
   if (block.type === "resource_link" && typeof block.uri === "string" &&
       (isImageMime(block.mimeType) || IMAGE_EXT_RE.test(block.uri))) {
-    return refFromUri(block.uri, isImageMime(block.mimeType) ? block.mimeType : undefined);
+    return refFromUri("image", block.uri, isImageMime(block.mimeType) ? block.mimeType : undefined);
   }
   return null;
 }
 
 /**
- * Collect every image out of a tool call's `content` array. Items are either a
- * bare content block or the ACP `{type:"content", content:<block>}` wrapper —
- * grok attaches generated images to the tool result this way.
+ * Collect ACP-standard image blocks out of a tool call's `content` array. Items
+ * are either a bare content block or the ACP `{type:"content", content:<block>}`
+ * wrapper. Forward-compat fallback — grok's real output path is
+ * `extractGeneratedMediaPaths`.
  */
-export function collectToolImages(payload: any): ImageRef[] {
+export function collectToolImages(payload: any): MediaRef[] {
   const arr = payload?.content;
   if (!Array.isArray(arr)) return [];
-  const out: ImageRef[] = [];
+  const out: MediaRef[] = [];
   for (const item of arr) {
     const ref = extractImageContent(item?.type === "content" ? item.content : item);
     if (ref) out.push(ref);
@@ -121,42 +131,46 @@ export function collectToolImages(payload: any): ImageRef[] {
 }
 
 /**
- * True for grok's image-generation tool call (`/imagine`). The first `tool_call`
- * is titled `image_gen`; the relabeled update is titled `imagine: <prompt>` and
- * carries `rawInput.variant === "ImageGen"`. Confirmed against grok 0.2.33 — see
+ * True for grok's media-generation tool calls (`/imagine`, `/imagine-video`).
+ * `image_gen` → relabeled `imagine: <prompt>` (rawInput.variant "ImageGen");
+ * `image_to_video` → `image-to-video: <prompt>` (variant "ImageToVideo");
+ * `reference_to_video` likewise. Confirmed against grok 0.2.33 — see
  * research/image-generation.md. The host tracks these ids so the *completed*
  * update (whose title is null) can still be recognized.
  */
-export function isImageGenToolCall(payload: any): boolean {
+export function isMediaGenToolCall(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
-  if (/^(image_gen\b|imagine:)/i.test(String(payload.title ?? ""))) return true;
+  if (/^(image_gen\b|imagine:|image_to_video\b|image-to-video:|reference_to_video\b|reference-to-video:)/i
+      .test(String(payload.title ?? ""))) return true;
   const ri = payload.rawInput;
   return !!(ri && typeof ri === "object" && typeof ri.variant === "string" &&
-    /imagegen/i.test(ri.variant));
+    /imagegen|imagetovideo|referencetovideo/i.test(ri.variant));
 }
 
 /**
  * Pull generated-image file paths out of a completed image_gen tool result.
  * grok does NOT use an ACP image/resource block — it writes the file to the
  * session dir and reports it as a JSON string inside a `text` content block:
- * `{"path":"…/images/1.jpg","filename":"1.jpg","session_folder":"images",…}`.
- * We parse that out and hand back a path ImageRef (the host inlines it). Only
- * paths with an image extension are accepted, so a non-image JSON result can't
+ * `{"path":"…/images/1.jpg","filename":"1.jpg","session_folder":"images",…}` for
+ * `/imagine`, and `{"path":"…/videos/1.mp4",…,"session_folder":"videos",…}` for
+ * `/imagine-video`. We parse that out and hand back a path MediaRef (the host
+ * inlines it), classifying image vs video by extension. Only paths with a known
+ * image/video extension are accepted, so a non-media JSON result can't
  * masquerade as one.
  */
-export function extractGeneratedImagePaths(payload: any): ImageRef[] {
+export function extractGeneratedMediaPaths(payload: any): MediaRef[] {
   const arr = payload?.content;
   if (!Array.isArray(arr)) return [];
-  const out: ImageRef[] = [];
+  const out: MediaRef[] = [];
   for (const item of arr) {
     const block = item?.type === "content" ? item.content : item;
     if (block?.type !== "text" || typeof block.text !== "string") continue;
     let parsed: any;
     try { parsed = JSON.parse(block.text); } catch { continue; }
     const path = parsed?.path;
-    if (typeof path === "string" && IMAGE_EXT_RE.test(path)) {
-      out.push({ kind: "path", path });
-    }
+    if (typeof path !== "string") continue;
+    const media = mediaKindForPath(path);
+    if (media) out.push({ media, kind: "path", path });
   }
   return out;
 }
@@ -167,8 +181,8 @@ export function routeSessionUpdate(u: any): UpdateRoute | null {
     case "agent_message_chunk": {
       const c = u.content;
       if (c && c.type && c.type !== "text") {
-        const img = extractImageContent(c);
-        if (img) return { event: "imageContent", image: img };
+        const media = extractImageContent(c);
+        if (media) return { event: "mediaContent", media };
       }
       return { event: "messageChunk", text: c?.text ?? "" };
     }

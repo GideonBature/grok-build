@@ -1167,30 +1167,41 @@
     scrollToBottom();
   }
 
-  // Render a generated image (grok `/imagine` etc.). The host has already
-  // inlined file-path output as a data: URI; `url` is a remote link we open
-  // externally. Clicking an inlined image opens its source file in VS Code.
-  function addGeneratedImage(msg) {
+  // Render generated media (grok `/imagine` image or `/imagine-video` video).
+  // The host has already inlined file-path output as a data: URI; `url` is a
+  // remote link we open externally. Clicking an inlined image opens its source
+  // file in VS Code; video gets native <video> controls.
+  function addGeneratedMedia(msg) {
     if (state.suppressReplayTurn) return;
+    const isVideo = msg.media === "video";
     closeToolGroup();
     clearWelcome();
     const el = document.createElement("div");
-    el.className = "generated-image";
+    el.className = "generated-image" + (isVideo ? " generated-video" : "");
     if (msg.src) {
-      const img = document.createElement("img");
-      img.src = msg.src;
-      img.alt = "Generated image";
-      img.loading = "lazy";
-      if (msg.path) {
-        img.title = "Open " + msg.path;
-        img.style.cursor = "pointer";
-        img.onclick = () => vscode.postMessage({ type: "openFile", path: msg.path });
+      if (isVideo) {
+        const video = document.createElement("video");
+        video.src = msg.src;
+        video.controls = true;
+        video.preload = "metadata";
+        video.playsInline = true;
+        el.appendChild(video);
+      } else {
+        const img = document.createElement("img");
+        img.src = msg.src;
+        img.alt = "Generated image";
+        img.loading = "lazy";
+        if (msg.path) {
+          img.title = "Open " + msg.path;
+          img.style.cursor = "pointer";
+          img.onclick = () => vscode.postMessage({ type: "openFile", path: msg.path });
+        }
+        el.appendChild(img);
       }
-      el.appendChild(img);
     } else if (msg.url) {
       const link = document.createElement("button");
       link.className = "preview-link";
-      link.textContent = "open generated image ↗";
+      link.textContent = isVideo ? "open generated video ↗" : "open generated image ↗";
       link.onclick = () => vscode.postMessage({ type: "openUrl", url: msg.url });
       el.appendChild(link);
     }
@@ -2233,8 +2244,8 @@
       case "messageChunk":
         appendAgent(msg.text);
         break;
-      case "image":
-        addGeneratedImage(msg);
+      case "media":
+        addGeneratedMedia(msg);
         break;
       case "userMessageChunk":
         appendUserChunk(msg.text);

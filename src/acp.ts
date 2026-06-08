@@ -3,8 +3,8 @@ import { createInterface, Interface } from "node:readline";
 import { EventEmitter } from "node:events";
 import {
   collectToolImages,
-  extractGeneratedImagePaths,
-  isImageGenToolCall,
+  extractGeneratedMediaPaths,
+  isMediaGenToolCall,
   extractPromptMeta,
   makeAckResponse,
   makeExitPlanResponse,
@@ -137,12 +137,13 @@ export class AcpClient extends EventEmitter {
   lastMeta?: PromptResultMeta;
 
   /**
-   * Tool-call ids known to be image generations (`/imagine`). grok's image_gen
-   * tool reports its output as a JSON-in-text path on the *completed* update,
-   * whose title is null — so we remember the id from the initial titled call to
-   * recognize the result. See research/image-generation.md.
+   * Tool-call ids known to be media generations (`/imagine`, `/imagine-video`).
+   * grok's image_gen / image_to_video tools report their output as a JSON-in-text
+   * path on the *completed* update, whose title is null — so we remember the id
+   * from the initial titled call to recognize the result. See
+   * research/image-generation.md.
    */
-  private imageGenCallIds = new Set<string>();
+  private mediaGenCallIds = new Set<string>();
 
   /**
    * Client-enforced plan gate. While true, workspace file writes and mutating
@@ -424,30 +425,30 @@ export class AcpClient extends EventEmitter {
     if (r.event === "messageChunk") this.emit("messageChunk", r.text);
     else if (r.event === "userMessageChunk") this.emit("userMessageChunk", r.text);
     else if (r.event === "thoughtChunk") this.emit("thoughtChunk", r.text);
-    else if (r.event === "imageContent") this.emit("imageContent", r.image);
+    else if (r.event === "mediaContent") this.emit("mediaContent", r.media);
     else if (r.event === "toolCall") {
       this.emit("toolCall", r.payload);
-      this.emitToolImages(r.payload);
+      this.emitToolMedia(r.payload);
     } else if (r.event === "toolCallUpdate") {
       this.emit("toolCallUpdate", r.payload);
-      this.emitToolImages(r.payload);
+      this.emitToolMedia(r.payload);
     } else if (r.event === "plan") this.emit("plan", r.payload);
     else this.emit("update", r.payload);
   }
 
   /**
-   * Emit any images carried by a tool call: ACP-standard image/resource blocks
-   * (`collectToolImages`) plus grok's image_gen path-in-JSON result, which only
-   * the flagged tool-call ids are allowed to produce.
+   * Emit any media carried by a tool call: ACP-standard image/resource blocks
+   * (`collectToolImages`) plus grok's image_gen / image_to_video path-in-JSON
+   * result, which only the flagged tool-call ids are allowed to produce.
    */
-  private emitToolImages(payload: any): void {
+  private emitToolMedia(payload: any): void {
     const id = payload?.toolCallId;
-    if (isImageGenToolCall(payload) && typeof id === "string") this.imageGenCallIds.add(id);
-    const imgs = collectToolImages(payload);
-    if (typeof id === "string" && this.imageGenCallIds.has(id)) {
-      imgs.push(...extractGeneratedImagePaths(payload));
+    if (isMediaGenToolCall(payload) && typeof id === "string") this.mediaGenCallIds.add(id);
+    const media = collectToolImages(payload);
+    if (typeof id === "string" && this.mediaGenCallIds.has(id)) {
+      media.push(...extractGeneratedMediaPaths(payload));
     }
-    for (const img of imgs) this.emit("imageContent", img);
+    for (const m of media) this.emit("mediaContent", m);
   }
 
   private async handleServerRequest(msg: any): Promise<void> {

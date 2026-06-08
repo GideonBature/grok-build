@@ -2,7 +2,7 @@
 
 Two layers:
 
-1. **Grok-free automated tests** (Vitest) — pure-logic unit tests plus happy-dom DOM tests that drive the real `media/chat.js`, plus a fast TerminalManager suite that spawns real `/bin/sh` children. **186 tests, all passing in ~1.4s.** Listed below. **None of them spawn the `grok` binary**, so the whole suite runs in CI on a clean Ubuntu box (`.github/workflows/ci.yml` runs `npm ci && npm test && npm run package` and never installs grok).
+1. **Grok-free automated tests** (Vitest) — pure-logic unit tests plus happy-dom DOM tests that drive the real `media/chat.js`, plus a fast TerminalManager suite that spawns real `/bin/sh` children. **363 tests, all passing in ~1.5s.** The per-file counts below predate several feature releases (voice, ask-question, plan-mode, v1.4.0 media/subagent/logout) and are indicative, not exact — `npm test` is the source of truth. **None of them spawn the `grok` binary**, so the whole suite runs in CI on a clean Ubuntu box (`.github/workflows/ci.yml` runs `npm ci && npm test && npm run package` and never installs grok).
 2. **VS Code integration tests** (deferred to v0.2 with `@vscode/test-electron`) — covers command registration, view lifecycle, settings reads, and the diff editor. Deferred because they require a headed VS Code, are slow, and the modules already cover the bug-prone surface.
 
 Separately, **grok-dependent probes** live as standalone scripts under `research/*.cjs`. They exercise the real CLI's ACP behavior (e.g. confirming `exit_plan_mode` treats any client reply as approval) and are run **manually** — Vitest's `include` glob is `test/**/*.test.ts`, so it never collects them. They're non-destructive (ACK writes without touching disk and run in a temp cwd) and require a `grok` binary on PATH; CI doesn't run them.
@@ -13,7 +13,10 @@ The goal of layer (1) is to make the protocol surface and UI logic regression-pr
 
 ## What we test
 
-### `test/acp-dispatch.test.ts` — protocol primitives (23 tests)
+### `test/acp-dispatch.test.ts` — protocol primitives (48 tests)
+
+Includes v1.4.0 generated-media extraction: `isMediaGenToolCall` / `extractGeneratedMediaPaths` (image_gen + image_to_video, image-vs-video classification, the collapsed-resume shape) and the ACP-standard `extractImageContent`/`collectToolImages` fallback.
+
 
 The wire format is the highest-value test surface: ACP changes break everything else if we miss them.
 
@@ -98,7 +101,10 @@ The pure heart of client-side plan enforcement. No spawn, no fs — just the cla
 - **Shell-metachar rejection** — redirection (`>`), chaining (`;`, `&&`, `||`), background (`&`), command substitution (`$(…)`, backticks), process substitution (`<(…)`), and script-block braces (`{}`) are rejected outright, so a read-only head can't smuggle a side effect
 - **Permission / plan-file classification** — recognizes grok's plan-file write so it can be allowed-and-snooped rather than blocked
 
-### `test/webview-helpers.test.ts` — pure webview helpers (18 tests)
+### `test/webview-helpers.test.ts` — pure webview helpers (45 tests)
+
+Includes the v1.4.0 subagent classifier `isSubagentToolCall` / `subagentLabel` (the confirmed `spawn_subagent` + `subagent_type` shape, plus name/kind/rawInput fallbacks).
+
 
 Shared between the shipped webview and the tests (`media/webview-helpers.js`).
 

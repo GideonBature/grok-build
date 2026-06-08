@@ -219,6 +219,16 @@ Each action appears in chat:
 - **Single call** — flat row: "Read sidebar.ts lines 1–120", "Edit package.json", "Run npm test"
 - **Multiple calls** — collapsed group ("Read, Edit +2") that expands on click
 
+### Image & video generation
+
+When Grok generates an image (`/imagine`) or a video (`/imagine-video`), it renders **inline** in the chat — images as a thumbnail (click to open the source file), videos with native playback controls. Both are **subscription-only** Grok features (they don't appear on API-key auth), and both survive a session resume. Under the hood Grok writes the file into its session directory and reports the path; the extension reads and inlines it. See [research/image-generation.md](research/image-generation.md) for the wire format.
+
+To generate: type `/imagine <prompt>` (or `/imagine-video <prompt>`) in the composer. Video always starts from a generated image, so a video request first produces a source frame, then animates it.
+
+### Subagents
+
+Grok delegates larger tasks to **parallel subagents** (`spawn_subagent`, with a `subagent_type` like `general-purpose` / `explore` / `plan`). These now render as a distinct **Subagent: \<type\>** card rather than disappearing into the generic tool group. Subagents are agent-initiated — phrase a prompt as substantial, parallelizable work (or ask explicitly to "use the explore subagent") to trigger one; trivial tasks won't delegate.
+
 ### Reasoning effort
 
 Click the **gear** icon → effort dots to pick a reasoning-effort level (`none` → `xhigh`). It's forwarded to the CLI as `--reasoning-effort`; changing it restarts the session (with an optional *Summarize & Restart* to carry context forward). Some subscription tiers may still reject effort at the backend.
@@ -238,6 +248,7 @@ The bottom-toolbar donut shows `usedK/maxK` tokens, updated after each prompt. W
 | Model and Effort | Model picker + reasoning effort dots |
 | Session | Compact conversation (sends `/compact`) |
 | Config | Open global `~/.grok/config.toml`, project `.grok/config.toml`, `grok mcp list` |
+| Account | **Sign out** — runs `grok logout`, clears cached credentials, returns to the sign-in screen |
 | Debug | Show extension logs (every ACP message in/out) |
 
 ### MCP servers
@@ -285,6 +296,7 @@ VS Code commands (not Grok slash commands). Open with **Ctrl+Shift+P** / **Cmd+S
 | `Grok: Send Selection` | Send the current text selection to Grok |
 | `Grok: Insert @-Mention` | Insert an `@`-mention for the active file into the composer |
 | `Grok: Show Logs` | Open the Grok output channel (ACP messages, errors) |
+| `Grok: Log Out` | Sign out of the Grok CLI (`grok logout`) and return to the sign-in screen |
 
 **Keybindings**
 
@@ -299,11 +311,11 @@ VS Code commands (not Grok slash commands). Open with **Ctrl+Shift+P** / **Cmd+S
 
 ```bash
 npm install
-npm test         # 94 tests, <2s, vitest — no VS Code, no spawn (except terminal-manager)
+npm test         # 363 tests, ~1.5s, vitest — no VS Code, no spawn (except terminal-manager)
 npm run package  # → grok-vscode-phuryn-<version>.vsix
 ```
 
-Pure tests are the floor — every change should keep 94 green. The split was made *specifically* so protocol bugs can be caught without spinning up VS Code:
+Pure tests are the floor — every change should keep them green. The split was made *specifically* so protocol bugs can be caught without spinning up VS Code:
 
 - `test/acp-dispatch.test.ts` — wire format, `parseAcpLine`, `routeSessionUpdate`, response builders
 - `test/chips.test.ts` — file-chip CRUD
@@ -330,7 +342,8 @@ See [TESTS.md](TESTS.md) for the full breakdown of what's covered vs deferred to
 ## Known limits
 
 - **Diff preview semantics.** The diff editor compares the proposed old and new text against each other, not against the file on disk at the moment of preview. The actual write happens via `fs/write_text_file` after approval. This is an ACP design constraint — `tool_call_update` carries the diff before the file is touched.
-- **No subagent inspector.** Subagent messages render inline as tool cards rather than in a dedicated panel.
+- **Subagent card, not a full inspector.** Subagent delegations render as a labeled **Subagent: \<type\>** card, but their child tool calls aren't yet nested *under* that card in a dedicated panel.
+- **Generated media is inlined as base64.** Images/videos are read and embedded as `data:` URIs; a large video is a few MB of base64. A future optimization could serve them via `asWebviewUri` instead.
 - **No worktree UI.** `Grok: New Worktree Session` is planned but not yet implemented.
 
 ---

@@ -4,8 +4,8 @@
 log for the `v1.4.0` branch so the session can be teleported to local VS Code and
 finished there.
 
-Branch: `v1.4.0` · base: `1.3.2` working tree · `npm test` → **361 passing** (was 337,
-+24) · `tsc -p . --noEmit` clean.
+Branch: `v1.4.0` · base: `1.3.2` working tree · `npm test` → **363 passing** (was 337,
++26) · `tsc -p . --noEmit` clean.
 
 > **Update (post-login):** logged into a SuperGrok account in this container via
 > `grok login --device-auth`, so the image + subagent wire formats are now
@@ -17,9 +17,12 @@ Branch: `v1.4.0` · base: `1.3.2` working tree · `npm test` → **361 passing**
 
 Implement features 1–3 from the CLI feature-gap exploration, in one version:
 
-1. **Image generation rendering** (`/imagine`, image tool output)
+1. **Image + video generation rendering** (`/imagine`, `/imagine-video`)
 2. **Subagent inspector** (parallel subagents → legible cards)
 3. **Logout** (issue #13)
+
+All three implemented and wire-confirmed live against grok 0.2.33 (image, video,
+resume all probed; subagent tool name confirmed from the CLI's bundled docs).
 
 ## "Can you install grok in the cloud env?" — yes
 
@@ -38,20 +41,26 @@ Confirmed live against 0.2.33 (unauthenticated):
 
 ## What's done
 
-### 1. Image rendering — ✅ CONFIRMED & fixed to the real format
-The initial guess (ACP `image`/`resource_link` blocks) was **wrong** — the probe caught the
+### 1. Image + video rendering — ✅ CONFIRMED live & fixed to the real format
+The initial guess (ACP `image`/`resource_link` blocks) was **wrong** — the probes caught the
 real shape and the extractor was rewritten. Real format (`research/image-generation.md`):
-`/imagine` → tool **`image_gen`** → the completed `tool_call_update` carries the saved file
-as a **JSON string inside a `text` content block**: `{"path":"…/images/1.jpg",…}`. Grok
-writes the JPEG to the session dir itself (observed 1024×1024).
-- `src/acp-dispatch.ts`: `isImageGenToolCall(payload)` (flags by title/`rawInput.variant`),
-  `extractGeneratedImagePaths(payload)` (parses the JSON-in-text path, image-ext only).
-  ACP-standard `extractImageContent`/`collectToolImages` kept as forward-compat fallback.
-- `src/acp.ts`: `emitToolImages()` tracks `image_gen` tool-call ids (the *completed* update
-  has a null title) and emits `imageContent` for the parsed path.
-- `src/sidebar.ts`: `postGeneratedImage()` reads the session-dir file and inlines it as a
-  `data:` URI (CSP can't load arbitrary disk paths). Verified the path is readable.
-- `media/chat.js` `addGeneratedImage()` + `case "image"`; `media/chat.css` `.generated-image`.
+`/imagine` → tool **`image_gen`**; `/imagine-video` → **`image_to_video`** (a skill that
+first generates a source image, then animates it — there is no text-to-video). Both write
+the file to the session dir (`images/1.jpg`, `videos/1.mp4`) and report it as a **JSON string
+inside a `text` content block** on the completed update: `{"path":"…/videos/1.mp4",…}`.
+Probed: `research/imagine-probe.cjs` (image, real 1024×1024 jpg), `research/video-probe.cjs`
+(video, real 6s mp4).
+- `src/acp-dispatch.ts`: `MediaRef` (`media:"image"|"video"`), `isMediaGenToolCall(payload)`
+  (flags `image_gen`/`image_to_video`/`reference_to_video` by title/`rawInput.variant`),
+  `extractGeneratedMediaPaths(payload)` (parses the JSON-in-text path, image+video ext,
+  classifies the kind). ACP-standard `extractImageContent`/`collectToolImages` kept as a
+  forward-compat fallback.
+- `src/acp.ts`: `emitToolMedia()` tracks media-gen tool-call ids (the *completed* update has
+  a null title) and emits `mediaContent`.
+- `src/sidebar.ts`: `postGeneratedMedia()` reads the session-dir file and inlines it as a
+  `data:` URI (CSP can't load arbitrary disk paths; added `media-src data:` for video).
+- `media/chat.js` `addGeneratedMedia()` (renders `<img>` or `<video controls>`) + `case
+  "media"`; `media/chat.css` `.generated-image`/`.generated-video`.
 
   **Resume (`session/load`) — ✅ confirmed.** Probed `research/resume-probe.cjs`: grok
   collapses the image into ONE completed `tool_call` (title `imagine: …` + path-JSON

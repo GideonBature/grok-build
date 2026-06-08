@@ -346,11 +346,12 @@ code {
   font-family: var(--vscode-editor-font-family);
 }
 
-/* Generated images (grok /imagine etc.) */
+/* Generated media (grok /imagine image, /imagine-video video) */
 .generated-image {
   margin: 6px var(--pad);
 }
-.generated-image img {
+.generated-image img,
+.generated-image video {
   max-width: 100%;
   height: auto;
   border-radius: 6px;

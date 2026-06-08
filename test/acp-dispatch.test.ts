@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   collectToolImages,
-  extractGeneratedImagePaths,
+  extractGeneratedMediaPaths,
   extractImageContent,
   extractPromptMeta,
-  isImageGenToolCall,
+  isMediaGenToolCall,
   isIncompatibleAgentError,
   makeAckResponse,
   makeExitPlanResponse,
@@ -269,39 +269,39 @@ describe("isIncompatibleAgentError", () => {
   });
 });
 
-describe("extractImageContent", () => {
+describe("extractImageContent (ACP-standard block fallback)", () => {
   it("pulls an inline base64 image block", () => {
     expect(extractImageContent({ type: "image", data: "AAAA", mimeType: "image/jpeg" }))
-      .toEqual({ kind: "data", mimeType: "image/jpeg", data: "AAAA" });
+      .toEqual({ media: "image", kind: "data", mimeType: "image/jpeg", data: "AAAA" });
   });
 
   it("defaults the mime when an image block omits it", () => {
     expect(extractImageContent({ type: "image", data: "AAAA" }))
-      .toEqual({ kind: "data", mimeType: "image/png", data: "AAAA" });
+      .toEqual({ media: "image", kind: "data", mimeType: "image/png", data: "AAAA" });
   });
 
   it("pulls an embedded resource blob", () => {
     expect(extractImageContent({
       type: "resource",
       resource: { uri: "file:///x/out.png", mimeType: "image/png", blob: "ZZZZ" },
-    })).toEqual({ kind: "data", mimeType: "image/png", data: "ZZZZ" });
+    })).toEqual({ media: "image", kind: "data", mimeType: "image/png", data: "ZZZZ" });
   });
 
   it("maps a file:// resource_link to a path", () => {
     expect(extractImageContent({
       type: "resource_link",
       uri: "file:///home/u/.grok/sessions/s/out.png",
-    })).toEqual({ kind: "path", path: "/home/u/.grok/sessions/s/out.png", mimeType: undefined });
+    })).toEqual({ media: "image", kind: "path", path: "/home/u/.grok/sessions/s/out.png", mimeType: undefined });
   });
 
   it("maps a bare absolute path resource_link to a path", () => {
     expect(extractImageContent({ type: "resource_link", uri: "/tmp/out.webp" }))
-      .toEqual({ kind: "path", path: "/tmp/out.webp", mimeType: undefined });
+      .toEqual({ media: "image", kind: "path", path: "/tmp/out.webp", mimeType: undefined });
   });
 
   it("maps a remote https image to a uri", () => {
     expect(extractImageContent({ type: "resource_link", uri: "https://x.ai/a.jpg" }))
-      .toEqual({ kind: "uri", uri: "https://x.ai/a.jpg", mimeType: undefined });
+      .toEqual({ media: "image", kind: "uri", uri: "https://x.ai/a.jpg", mimeType: undefined });
   });
 
   it("ignores text and non-image content", () => {
@@ -321,8 +321,8 @@ describe("collectToolImages", () => {
       ],
     });
     expect(imgs).toHaveLength(2);
-    expect(imgs[0]).toEqual({ kind: "data", mimeType: "image/png", data: "AA" });
-    expect(imgs[1]).toEqual({ kind: "path", path: "/tmp/a.gif", mimeType: undefined });
+    expect(imgs[0]).toEqual({ media: "image", kind: "data", mimeType: "image/png", data: "AA" });
+    expect(imgs[1]).toEqual({ media: "image", kind: "path", path: "/tmp/a.gif", mimeType: undefined });
   });
 
   it("returns [] when there is no content array", () => {
@@ -331,13 +331,13 @@ describe("collectToolImages", () => {
   });
 });
 
-describe("routeSessionUpdate image chunks", () => {
-  it("routes an agent_message_chunk image block to imageContent", () => {
+describe("routeSessionUpdate media chunks", () => {
+  it("routes an agent_message_chunk image block to mediaContent", () => {
     const r = routeSessionUpdate({
       sessionUpdate: "agent_message_chunk",
       content: { type: "image", data: "AA", mimeType: "image/png" },
     });
-    expect(r).toEqual({ event: "imageContent", image: { kind: "data", mimeType: "image/png", data: "AA" } });
+    expect(r).toEqual({ event: "mediaContent", media: { media: "image", kind: "data", mimeType: "image/png", data: "AA" } });
   });
 
   it("still routes text chunks as messageChunk", () => {
@@ -349,76 +349,75 @@ describe("routeSessionUpdate image chunks", () => {
   });
 });
 
-describe("image_gen (grok's real /imagine wire shape)", () => {
-  // Confirmed against grok 0.2.33 (research/image-generation.md): the tool is
-  // `image_gen`, relabeled `imagine: <prompt>` with rawInput.variant "ImageGen",
-  // and the completed update reports the file as JSON inside a text block.
-  const completed = {
-    sessionUpdate: "tool_call_update",
-    toolCallId: "call-x",
-    status: "completed",
-    content: [{
-      type: "content",
-      content: {
-        type: "text",
-        text: JSON.stringify({
-          path: "/root/.grok/sessions/%2Ftmp/s/images/1.jpg",
-          filename: "1.jpg",
-          session_folder: "images",
-          message: "Image generated and saved to …",
-        }),
-      },
-    }],
-  };
+describe("media generation (grok's real /imagine + /imagine-video wire shapes)", () => {
+  // Confirmed against grok 0.2.33 (research/image-generation.md): images come from
+  // `image_gen` (relabeled `imagine: <prompt>`, rawInput.variant "ImageGen") and
+  // videos from `image_to_video` (`image-to-video: <prompt>`, variant
+  // "ImageToVideo"). Both report the file as JSON inside a text block on the
+  // completed update — images in `images/*.jpg`, videos in `videos/*.mp4`.
+  function completedWith(path: string) {
+    return {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-x",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: JSON.stringify({ path, filename: path.split("/").pop() }) } }],
+    };
+  }
 
-  it("recognizes the image_gen tool call by title", () => {
-    expect(isImageGenToolCall({ title: "image_gen", rawInput: { prompt: "a cube", aspect_ratio: "1:1" } })).toBe(true);
-    expect(isImageGenToolCall({ title: "imagine: a small red cube" })).toBe(true);
+  it("recognizes the image_gen tool call by title and variant", () => {
+    expect(isMediaGenToolCall({ title: "image_gen", rawInput: { prompt: "a cube", aspect_ratio: "1:1" } })).toBe(true);
+    expect(isMediaGenToolCall({ title: "imagine: a small red cube" })).toBe(true);
+    expect(isMediaGenToolCall({ title: "imagine: x", rawInput: { variant: "ImageGen", prompt: "x" } })).toBe(true);
   });
 
-  it("recognizes the relabeled update by rawInput.variant", () => {
-    expect(isImageGenToolCall({ title: "imagine: x", rawInput: { variant: "ImageGen", prompt: "x" } })).toBe(true);
+  it("recognizes the image_to_video tool call by title and variant", () => {
+    expect(isMediaGenToolCall({ title: "image_to_video", rawInput: { image: "/s/1.jpg", prompt: "rotate", duration: 6 } })).toBe(true);
+    expect(isMediaGenToolCall({ title: "image-to-video: the red cube rotates" })).toBe(true);
+    expect(isMediaGenToolCall({ title: "image-to-video: x", rawInput: { variant: "ImageToVideo" } })).toBe(true);
+    expect(isMediaGenToolCall({ title: "reference-to-video: x", rawInput: { variant: "ReferenceToVideo" } })).toBe(true);
   });
 
-  it("does not flag ordinary tools as image gen", () => {
-    expect(isImageGenToolCall({ title: "run_terminal_command", rawInput: { variant: "Bash" } })).toBe(false);
-    expect(isImageGenToolCall(null)).toBe(false);
+  it("does not flag ordinary tools as media gen", () => {
+    expect(isMediaGenToolCall({ title: "run_terminal_command", rawInput: { variant: "Bash" } })).toBe(false);
+    expect(isMediaGenToolCall(null)).toBe(false);
   });
 
-  it("extracts the saved image path from the completed JSON-in-text result", () => {
-    expect(extractGeneratedImagePaths(completed)).toEqual([
-      { kind: "path", path: "/root/.grok/sessions/%2Ftmp/s/images/1.jpg" },
+  it("extracts a saved image path as media:image", () => {
+    expect(extractGeneratedMediaPaths(completedWith("/root/.grok/sessions/%2Ftmp/s/images/1.jpg"))).toEqual([
+      { media: "image", kind: "path", path: "/root/.grok/sessions/%2Ftmp/s/images/1.jpg" },
     ]);
   });
 
-  it("ignores tool-result JSON whose path is not an image", () => {
-    const r = extractGeneratedImagePaths({
-      content: [{ type: "content", content: { type: "text", text: JSON.stringify({ path: "/tmp/out.txt" }) } }],
-    });
-    expect(r).toEqual([]);
+  it("extracts a saved video path as media:video", () => {
+    expect(extractGeneratedMediaPaths(completedWith("/root/.grok/sessions/%2Ftmp/s/videos/1.mp4"))).toEqual([
+      { media: "video", kind: "path", path: "/root/.grok/sessions/%2Ftmp/s/videos/1.mp4" },
+    ]);
+  });
+
+  it("ignores tool-result JSON whose path is neither image nor video", () => {
+    expect(extractGeneratedMediaPaths(completedWith("/tmp/out.txt"))).toEqual([]);
   });
 
   it("ignores non-JSON and pathless text results", () => {
-    expect(extractGeneratedImagePaths({ content: [{ type: "content", content: { type: "text", text: "done" } }] })).toEqual([]);
-    expect(extractGeneratedImagePaths({ content: [{ type: "content", content: { type: "text", text: '{"ok":true}' } }] })).toEqual([]);
+    expect(extractGeneratedMediaPaths({ content: [{ type: "content", content: { type: "text", text: "done" } }] })).toEqual([]);
+    expect(extractGeneratedMediaPaths({ content: [{ type: "content", content: { type: "text", text: '{"ok":true}' } }] })).toEqual([]);
   });
 
-  it("resume: the collapsed tool_call carries title + path together, so replay renders the image", () => {
-    // On session/load grok replays image_gen as ONE completed tool_call (not the
-    // live tool_call + separate update) titled `imagine: …` with rawInput.variant
-    // "ImageGen" AND the path content. Both detectors must fire on this one
-    // payload so resumed sessions show the image. Confirmed via resume probe.
+  it("resume: the collapsed video tool_call carries title + path together", () => {
+    // On session/load grok replays media gen as ONE completed tool_call (title +
+    // variant + path content together), so both detectors must fire on the one
+    // payload. Confirmed via resume probe (image) — video is the same shape.
     const replayed = {
       sessionUpdate: "tool_call",
-      toolCallId: "call-b508",
-      title: "imagine: a small red cube on white background",
+      toolCallId: "call-12ee",
+      title: "image-to-video: the red cube slowly rotates",
       status: "completed",
-      rawInput: { variant: "ImageGen", prompt: "a small red cube", aspect_ratio: "1:1" },
-      content: [{ type: "content", content: { type: "text", text: JSON.stringify({ path: "/root/.grok/sessions/s/images/1.jpg", session_folder: "images" }) } }],
+      rawInput: { variant: "ImageToVideo", prompt: "rotate", image: "/s/images/1.jpg", duration: 6 },
+      content: [{ type: "content", content: { type: "text", text: JSON.stringify({ path: "/root/.grok/sessions/s/videos/1.mp4", session_folder: "videos" }) } }],
     };
-    expect(isImageGenToolCall(replayed)).toBe(true);
-    expect(extractGeneratedImagePaths(replayed)).toEqual([
-      { kind: "path", path: "/root/.grok/sessions/s/images/1.jpg" },
+    expect(isMediaGenToolCall(replayed)).toBe(true);
+    expect(extractGeneratedMediaPaths(replayed)).toEqual([
+      { media: "video", kind: "path", path: "/root/.grok/sessions/s/videos/1.mp4" },
     ]);
   });
 });
