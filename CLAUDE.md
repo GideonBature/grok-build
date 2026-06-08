@@ -107,16 +107,27 @@ See `README.md § Install` for the full per-platform matrix.
 
 ## Publishing
 
-**Release procedure — ALWAYS tag + create a GitHub Release on a release push to `main`** (standing convention; mirrors the `v1.0.0…` tag history + GitHub Releases):
+**Release procedure — ALWAYS tag + create a GitHub Release (with the `.vsix` attached) on a release push to `main`** (standing convention; mirrors the `v1.0.0…` tag history + GitHub Releases):
+
+**The whole procedure below (steps 2–5) is scripted** — after bumping the version + writing the changelog section (step 1, user-initiated), just run:
+
+```bash
+pwsh scripts\release.ps1        # Windows (native) — what we use here
+./scripts/release.sh            # macOS / Linux / WSL
+```
+
+It reads the version from `package.json`, runs the gate, builds the vsix, commits the working tree (`-MessageFile`/`-Message` override the default `Release vX.Y.Z`), pushes `main`, creates the annotated tag, and runs `gh release create` **with the vsix attached** — extracting the matching `## X.Y.Z` changelog section as the release notes. `-DryRun`/`--dry-run` previews; `-NoTest`/`--no-test` skips the gate. It refuses to run off `main` or when the tag already exists (i.e. the version wasn't bumped). It does **not** publish to the Marketplace.
+
+What the script encodes, step by step:
 
 1. Bump `version` in `package.json` (user-initiated) and add the dated section to `changelog.md`.
 2. `npm test` (368-test floor, all green) + `tsc -p . --noEmit` clean.
 3. Commit + push to `main` (direct-to-main, no feature branches).
 4. **Annotated git tag** `vX.Y.Z` at the release commit → `git tag -a vX.Y.Z -m "Release vX.Y.Z"` → `git push origin vX.Y.Z`.
-5. **GitHub Release** for that tag → `gh release create vX.Y.Z --title "Release vX.Y.Z" --notes-file <notes>` (notes = the new changelog section(s); include any earlier version that was bumped but never released).
+5. **GitHub Release** for that tag → `gh release create vX.Y.Z --title "Release vX.Y.Z" --notes-file <notes> <vsix>` (notes = the new changelog section(s); include any earlier version that was bumped but never released). **Always attach the built `grok-vscode-phuryn-X.Y.Z.vsix` as a release asset** so the exact installable build is downloadable from the release.
 6. **Marketplace publish is separate and explicit** — only `npm run publish` (vsce) when the user asks. The `PawelHuryn` publisher is registered + authenticated locally; publishing ≠ tagging.
 
-Don't skip the tag/release on a release push. (A pure mid-dev version bump that isn't a release — e.g. the unreleased v1.3.0 voice iteration — is the only exception.)
+Don't skip the tag/release (or the vsix asset) on a release push. (A pure mid-dev version bump that isn't a release — e.g. the unreleased v1.3.0 voice iteration — is the only exception.)
 
 ## Repo conventions
 

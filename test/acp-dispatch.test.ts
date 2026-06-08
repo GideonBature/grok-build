@@ -374,6 +374,15 @@ describe("media generation (grok's real /imagine + /imagine-video wire shapes)",
     expect(isMediaGenToolCall({ title: "imagine: x", rawInput: { variant: "ImageGen", prompt: "x" } })).toBe(true);
   });
 
+  it("recognizes the image_edit tool call by title and variant (the /imagine reference-edit)", () => {
+    // Confirmed live (grok 0.2.x, session 019ea92a): the initial tool_call is
+    // titled `image_edit`, the in-progress update relabels to `imagine-edit: …`
+    // with variant `ImageEdit`. Missing this is why the edited image was invisible.
+    expect(isMediaGenToolCall({ title: "image_edit", rawInput: { prompt: "make him fly a rocket", image: "/s/2.jpg" } })).toBe(true);
+    expect(isMediaGenToolCall({ title: "imagine-edit: transform the reference photo" })).toBe(true);
+    expect(isMediaGenToolCall({ title: "imagine-edit: x", rawInput: { variant: "ImageEdit", prompt: "x" } })).toBe(true);
+  });
+
   it("recognizes the image_to_video tool call by title and variant", () => {
     expect(isMediaGenToolCall({ title: "image_to_video", rawInput: { image: "/s/1.jpg", prompt: "rotate", duration: 6 } })).toBe(true);
     expect(isMediaGenToolCall({ title: "image-to-video: the red cube rotates" })).toBe(true);
@@ -395,6 +404,22 @@ describe("media generation (grok's real /imagine + /imagine-video wire shapes)",
   it("extracts a saved video path as media:video", () => {
     expect(extractGeneratedMediaPaths(completedWith("/root/.grok/sessions/%2Ftmp/s/videos/1.mp4"))).toEqual([
       { media: "video", kind: "path", path: "/root/.grok/sessions/%2Ftmp/s/videos/1.mp4" },
+    ]);
+  });
+
+  it("extracts the live image_edit JSON result and strips the \\\\?\\ prefix", () => {
+    // Verbatim from session 019ea92a (the Elon reference-edit, saved as 3.jpg):
+    // an extended-length Windows path inside the machine-readable JSON result.
+    const live = {
+      content: [{ type: "content", content: { type: "text", text: JSON.stringify({
+        path: "\\\\?\\C:\\Users\\Dell\\.grok\\sessions\\s\\images\\3.jpg",
+        filename: "3.jpg",
+        session_folder: "images",
+        message: "Image edited and saved to \\\\?\\C:\\Users\\Dell\\.grok\\sessions\\s\\images\\3.jpg.",
+      }) } }],
+    };
+    expect(extractGeneratedMediaPaths(live)).toEqual([
+      { media: "image", kind: "path", path: "C:\\Users\\Dell\\.grok\\sessions\\s\\images\\3.jpg" },
     ]);
   });
 

@@ -149,6 +149,7 @@ export function collectToolImages(payload: any): MediaRef[] {
  * The raw tool name and relabeled title differ by build/platform — confirmed
  * live against native-Windows grok 0.2.x AND the Linux 0.2.33 probes:
  *   - `/imagine`       → tool `image_gen`,  title `imagine: <prompt>`,        variant `ImageGen`
+ *   - `/imagine` (edit of a reference image) → tool `image_edit`, title `imagine-edit: <prompt>`, variant `ImageEdit`
  *   - `/imagine-video` → tool `video_gen`,  title `imagine-video: <prompt>`,  variant `VideoGen`
  *     (older/Linux builds surfaced this as `image_to_video` / `image-to-video:`)
  *   - `reference_to_video` likewise.
@@ -158,12 +159,12 @@ export function collectToolImages(payload: any): MediaRef[] {
 export function isMediaGenToolCall(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
   const title = String(payload.title ?? "");
-  if (/^imagine(-video)?:/i.test(title)) return true;                         // relabeled titles
-  if (/^(image_gen|video_gen|image_to_video|reference_to_video)\b/i.test(title)) return true; // raw tool names
+  if (/^imagine(-video|-edit)?:/i.test(title)) return true;                   // relabeled titles
+  if (/^(image_gen|image_edit|video_gen|image_to_video|reference_to_video)\b/i.test(title)) return true; // raw tool names
   if (/^(image-to-video:|reference-to-video:)/i.test(title)) return true;     // legacy relabels
   const ri = payload.rawInput;
   return !!(ri && typeof ri === "object" && typeof ri.variant === "string" &&
-    /imagegen|videogen|imagetovideo|referencetovideo/i.test(ri.variant));
+    /imagegen|imageedit|videogen|imagetovideo|referencetovideo/i.test(ri.variant));
 }
 
 /**

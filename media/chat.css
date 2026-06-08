@@ -366,19 +366,21 @@ code {
 
 /* Generated media (grok /imagine image, /imagine-video video) */
 .generated-image {
+  /* A normal block so the child's `max-width: 100%` resolves against a definite
+     width. A shrink-to-fit container (width: fit-content) makes that basis
+     indefinite, which can collapse a replaced <img> to zero width — that's what
+     made generations invisible in 1.4.0. position:relative anchors the overlay. */
   position: relative;
-  width: fit-content;
-  max-width: 100%;
   margin: 6px var(--pad);
 }
 .generated-image img,
 .generated-image video {
   /* Cap the rendered size — full-resolution generations are impractical to view
      inline. 640px on the longer edge keeps them legible without flooding the
-     chat; the file itself is untouched (Open in VS Code shows full res). */
+     chat (and `100%` keeps them inside a narrow sidebar); the file itself is
+     untouched (Open in VS Code shows full res). */
   max-width: min(100%, 640px);
   max-height: 640px;
-  width: auto;
   height: auto;
   border-radius: 6px;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
