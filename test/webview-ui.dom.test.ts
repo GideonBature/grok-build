@@ -234,3 +234,45 @@ describe("reasoning trace (regression: thinking traces no longer expandable)", (
     expect(chevron.textContent).toBe("▶");
   });
 });
+
+describe("welcome version line (session-start lifecycle)", () => {
+  const ver = (doc: Document) => $(doc, "welcome-version").textContent;
+
+  it("flips to connected only when priming finishes, not at the handshake", () => {
+    const { window, doc } = bootWebview();
+
+    // ACP handshake done — but the hidden primer is still in flight, so the
+    // line must stay "starting…", NOT jump to "connected" yet.
+    dispatch(window, { type: "initialized", info: { version: "0.2.33" } });
+    expect(ver(doc)).toBe("starting...");
+
+    // Priming spinner clears → grok is finally ready → reveal the version.
+    dispatch(window, { type: "setBusy", value: false });
+    expect(ver(doc)).toBe("connected · v0.2.33");
+  });
+
+  it("shows the silent-update hint, then starting, then the new version", () => {
+    const { window, doc } = bootWebview();
+
+    dispatch(window, { type: "cliUpdating" });
+    expect(ver(doc)).toBe("Updating Grok Build CLI…");
+
+    dispatch(window, { type: "initialized", info: { version: "0.2.40" } });
+    expect(ver(doc)).toBe("starting...");
+
+    dispatch(window, { type: "setBusy", value: false });
+    expect(ver(doc)).toBe("connected · v0.2.40");
+  });
+
+  it("does not overwrite the version on later (post-priming) busy toggles", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "initialized", info: { version: "0.2.33" } });
+    dispatch(window, { type: "setBusy", value: false });
+    expect(ver(doc)).toBe("connected · v0.2.33");
+
+    // A normal prompt's busy cycle later — the line must not revert.
+    dispatch(window, { type: "setBusy", value: true });
+    dispatch(window, { type: "setBusy", value: false });
+    expect(ver(doc)).toBe("connected · v0.2.33");
+  });
+});

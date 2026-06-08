@@ -34,3 +34,13 @@ export function locateGrokCli(configuredPath: string): string | undefined {
   }
   return undefined;
 }
+
+/**
+ * Decide whether to silently auto-update the grok CLI because *our extension* was
+ * upgraded since the last run. True only when a prior version was recorded (so a
+ * fresh install never triggers an update — that's the "not-first-run" rule) and it
+ * differs from the current extension version. Pure so it's unit-testable.
+ */
+export function extensionWasUpgraded(lastSeen: string | undefined, current: string): boolean {
+  return !!lastSeen && !!current && lastSeen !== current;
+}

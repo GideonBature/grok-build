@@ -105,6 +105,12 @@
     // "stoppable" (regular prompts, verdict afterTurn) and the send button
     // shows a stop icon that the user can click to cancel grok mid-stream.
     busyLocked: false,
+    // grok CLI version from the ACP `initialized` handshake, plus a flag marking
+    // the session-start window: while startingPhase is true the welcome line
+    // shows "starting…"; it flips to "connected · v<cliVersion>" only when the
+    // priming spinner clears (setBusy:false). See the initialized/setBusy cases.
+    cliVersion: "",
+    startingPhase: false,
     // While replaying, suppress everything from the start of the current user
     // message (a primer turn) through the end of grok's response to it — until
     // the next user message starts. Keeps the chat clean of our session-start
@@ -2130,11 +2136,24 @@
         state.cwd = msg.cwd || "";
         break;
       case "initialized": {
-        const ver = msg.info.version ? ` · v${msg.info.version}` : "";
+        // The ACP handshake is done, but grok isn't ready for the user until the
+        // hidden primer turn lands. Stash the version and keep showing "starting…";
+        // the line flips to "connected · v…" only when the spinner hides (the
+        // setBusy:false at the end of priming). See the setBusy handler.
+        state.cliVersion = msg.info.version || "";
+        state.startingPhase = true;
         const verEl = $("welcome-version");
-        if (verEl) verEl.textContent = `connected${ver}`;
+        if (verEl) verEl.textContent = "starting...";
         const onb = $("welcome-onboarding");
         if (onb) onb.innerHTML = "";
+        break;
+      }
+      case "cliUpdating": {
+        // One-time hint while the silent `grok update` runs before the session
+        // spawns; overwritten by "starting…" once grok connects, then
+        // "connected · v<new version>" once the primer finishes.
+        const verEl = $("welcome-version");
+        if (verEl) verEl.textContent = "Updating Grok Build CLI…";
         break;
       }
       case "session": {
@@ -2416,9 +2435,22 @@
         state.busy = !!msg.value;
         state.busyLocked = !!msg.locked;
         updateSendButton();
-        // When a non-turn busy window clears (e.g. session-start priming), send
-        // anything dictated during it — priming has no agentEnd to flush on.
-        if (!state.busy) flushVoiceQueue();
+        if (!state.busy) {
+          // When a non-turn busy window clears (e.g. session-start priming), send
+          // anything dictated during it — priming has no agentEnd to flush on.
+          flushVoiceQueue();
+          // Priming just finished: the first hidden message was sent and processed,
+          // so grok is finally ready. Reveal the version now — not at "initialized",
+          // which fires while the primer is still in flight (spinner still up).
+          if (state.startingPhase) {
+            state.startingPhase = false;
+            const verEl = $("welcome-version");
+            if (verEl) {
+              const ver = state.cliVersion ? ` · v${state.cliVersion}` : "";
+              verEl.textContent = `connected${ver}`;
+            }
+          }
+        }
         // Refresh the gear popover's model/effort lock state if it's open.
         if (!gearPopover.hidden) renderGearMain();
         break;

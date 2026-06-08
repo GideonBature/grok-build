@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { locateGrokCli } from "../src/cli-locator";
+import { locateGrokCli, extensionWasUpgraded } from "../src/cli-locator";
 
 const IS_WIN = process.platform === "win32";
 const PATH_SEP = IS_WIN ? ";" : ":";
@@ -62,5 +62,28 @@ describe("locateGrokCli", () => {
       if (originalHome) process.env.HOME = originalHome;
       if (originalUserProfile) process.env.USERPROFILE = originalUserProfile;
     }
+  });
+});
+
+describe("extensionWasUpgraded", () => {
+  it("is false on a fresh install (no prior version recorded)", () => {
+    expect(extensionWasUpgraded(undefined, "1.4.0")).toBe(false);
+    expect(extensionWasUpgraded("", "1.4.0")).toBe(false);
+  });
+
+  it("is false when the version is unchanged (plain restart)", () => {
+    expect(extensionWasUpgraded("1.4.0", "1.4.0")).toBe(false);
+  });
+
+  it("is true when the extension version changed (an upgrade)", () => {
+    expect(extensionWasUpgraded("1.3.2", "1.4.0")).toBe(true);
+  });
+
+  it("is true even on a downgrade (any version mismatch re-syncs the CLI)", () => {
+    expect(extensionWasUpgraded("1.4.0", "1.3.2")).toBe(true);
+  });
+
+  it("is false defensively when the current version is empty", () => {
+    expect(extensionWasUpgraded("1.4.0", "")).toBe(false);
   });
 });

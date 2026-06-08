@@ -2,12 +2,14 @@ import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { AcpClient, EffortLevel, ExitPlanRequest, PermissionRequest, QuestionRequest } from "./acp";
 import { resolveVoiceKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice";
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
 import { MediaRef, isIncompatibleAgentError } from "./acp-dispatch";
-import { locateGrokCli } from "./cli-locator";
+import { locateGrokCli, extensionWasUpgraded } from "./cli-locator";
 import { TerminalManager } from "./terminal-manager";
 import {
   FileChip,
@@ -70,6 +72,13 @@ type WebviewMsg =
 
 const SESSION_META_KEY = "grok.sessionMeta";
 
+// Records the extension version at the last grok-CLI auto-update check, so the
+// silent `grok update` fires once per extension upgrade and never on a fresh
+// install. See maybeUpdateCliOnUpgrade.
+const CLI_UPDATE_VERSION_KEY = "grok.cliUpdateExtVersion";
+
+const execFileAsync = promisify(execFile);
+
 // grok's non-plan ("act") mode id on the wire. The CLI reports this via
 // current_mode_update after leaving plan mode (verified against grok 0.2.3 —
 // see research/plan-mode.md). The UI labels it "Agent"; the wire calls it
@@ -118,6 +127,8 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
   // here and run it once the current prompt resolves (see handleSend).
   private afterTurn?: () => Promise<void>;
   private cliPath?: string;
+  // Guards the silent grok-CLI auto-update so it runs at most once per activation.
+  private cliUpdateChecked = false;
   private sessionGen = 0;
   private hasHistory = false;
   // True for the whole session-start window (spawn → newSession/load → primer).
@@ -630,6 +641,38 @@ See design doc for the full state machine diagram.`;
     return this.startSession();
   }
 
+  /**
+   * Silently update the grok CLI when *our extension* was upgraded since the last
+   * run (the user opted into silent updates). Runs once per activation, before we
+   * spawn grok — so no grok process holds the binary open (matters on Windows) and
+   * the next `initialize` reports the new version on the welcome screen. Never on a
+   * fresh install (no prior version recorded), never blocking: a failed/slow update
+   * is logged and we proceed with the current binary.
+   */
+  private async maybeUpdateCliOnUpgrade(cliPath: string): Promise<void> {
+    if (this.cliUpdateChecked) return;
+    this.cliUpdateChecked = true;
+    const current = (this.context.extension.packageJSON as { version?: string })?.version ?? "";
+    const lastSeen = this.context.globalState.get<string>(CLI_UPDATE_VERSION_KEY);
+    try {
+      if (extensionWasUpgraded(lastSeen, current)) {
+        this.output.appendLine(`Extension upgraded ${lastSeen} → ${current}; updating grok CLI (silent).`);
+        this.post({ type: "cliUpdating" });
+        try {
+          const { stdout, stderr } = await execFileAsync(cliPath, ["update"], { timeout: 180_000 });
+          if (stdout?.trim()) this.output.appendLine(stdout.trim());
+          if (stderr?.trim()) this.output.appendLine(stderr.trim());
+        } catch (e) {
+          this.output.appendLine(`grok update failed (continuing with current binary): ${(e as Error).message}`);
+        }
+      }
+    } finally {
+      // Record the current version regardless, so a fresh install sets the baseline
+      // (no update) and the *next* upgrade is the one that triggers.
+      void this.context.globalState.update(CLI_UPDATE_VERSION_KEY, current);
+    }
+  }
+
   /** Confirm a restart for a setting that only applies on a fresh session
    *  (reasoning effort, cross-agent model). Returns the chosen restart mode, or
    *  undefined if the user dismissed the dialog. */
@@ -722,6 +765,11 @@ See design doc for the full state machine diagram.`;
       this.post({ type: "onboarding", state: "missing-cli", platform: process.platform });
       return undefined;
     }
+
+    // If our extension was upgraded, silently bring the CLI up to date *before*
+    // spawning it (once per activation). Bail if a newer start superseded us.
+    await this.maybeUpdateCliOnUpgrade(cliPath);
+    if (gen !== this.sessionGen) return undefined;
 
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     const env = this.buildEnv(cwd);
