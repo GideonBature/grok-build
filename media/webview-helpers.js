@@ -160,7 +160,18 @@
     return "Subagent";
   }
 
-  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel };
+  // True when the scroll viewport is at (or within `threshold` px of) the
+  // bottom. Drives the chat's "stick to bottom" auto-scroll: while the user is
+  // pinned we follow streaming output, but once they scroll up to read history
+  // we leave the view alone (#16). The threshold absorbs sub-pixel rounding and
+  // lets a near-bottom position still count as pinned.
+  function shouldStickToBottom(scrollTop, scrollHeight, clientHeight, threshold) {
+    const t = typeof threshold === "number" ? threshold : 40;
+    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+    return distanceFromBottom <= t;
+  }
+
+  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {

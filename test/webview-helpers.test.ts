@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — plain JS module, no types
-import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel } from "../media/webview-helpers.js";
+import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom } from "../media/webview-helpers.js";
 
 describe("looksLikeFileRef", () => {
   it("accepts a bare filename with a known extension", () => {
@@ -317,5 +317,33 @@ describe("subagentLabel", () => {
     expect(subagentLabel({ tool: "task" })).toBe("Subagent");
     expect(subagentLabel({ rawInput: { is_background: true } })).toBe("background task");
     expect(subagentLabel(null)).toBe("Subagent");
+  });
+});
+
+describe("shouldStickToBottom", () => {
+  it("is pinned when scrolled exactly to the bottom", () => {
+    // scrollTop + clientHeight === scrollHeight
+    expect(shouldStickToBottom(900, 1000, 100)).toBe(true);
+  });
+
+  it("is pinned when within the default threshold of the bottom", () => {
+    // 30px from the bottom (default threshold 40)
+    expect(shouldStickToBottom(870, 1000, 100)).toBe(true);
+  });
+
+  it("is NOT pinned once scrolled up past the threshold", () => {
+    // 200px from the bottom — the user is reading history (#16)
+    expect(shouldStickToBottom(700, 1000, 100)).toBe(false);
+  });
+
+  it("is pinned when content fits without scrolling", () => {
+    // scrollHeight <= clientHeight, scrollTop 0 → distance is negative
+    expect(shouldStickToBottom(0, 80, 100)).toBe(true);
+  });
+
+  it("honors a custom threshold", () => {
+    // 150px from bottom: pinned only with a generous threshold
+    expect(shouldStickToBottom(750, 1000, 100, 200)).toBe(true);
+    expect(shouldStickToBottom(750, 1000, 100, 50)).toBe(false);
   });
 });

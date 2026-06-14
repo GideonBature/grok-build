@@ -128,6 +128,12 @@
     // message ([Plan cancelled] with no comment) — grok's response to it still
     // renders. Distinct from suppressReplayTurn (which hides the whole turn).
     skipUserBubble: false,
+    // Whether the chat is "pinned" to the bottom. A scroll listener flips this
+    // off the moment the user scrolls up to read earlier messages; while it's
+    // off, streaming thought/agent chunks no longer yank the view back down
+    // (#16). Interactive activity (permission/question cards, the user's own
+    // sent message) re-pins via forceScrollToBottom().
+    stickToBottom: true,
   };
 
   // Matches any version of the extension's primer (v1, v2, …). Used during
@@ -241,7 +247,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom } = globalThis.GrokWebviewHelpers;
 
   function renderDiffCode(code) {
     const lines = code.replace(/\n+$/, "").split("\n");
@@ -913,6 +919,7 @@
     state.userMsgCount = 0;
     state.suppressReplayTurn = false;
     state.skipUserBubble = false;
+    state.stickToBottom = true; // a fresh/loaded session starts pinned
     hidePlanProcessing();
   }
 
@@ -1537,9 +1544,25 @@
     state.planProcessingEl = null;
   }
 
+  // Follow streaming output only while the user is pinned to the bottom. Once
+  // they scroll up (the listener below clears state.stickToBottom) this becomes
+  // a no-op, so they can read history while grok keeps thinking (#16).
   function scrollToBottom() {
+    if (state.stickToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // Always pull the view to the bottom and re-pin. For interactive activity the
+  // user needs to see regardless of where they've scrolled: permission/question
+  // cards and their own just-sent message.
+  function forceScrollToBottom() {
+    state.stickToBottom = true;
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+
+  messagesEl.addEventListener("scroll", () => {
+    state.stickToBottom = shouldStickToBottom(
+      messagesEl.scrollTop, messagesEl.scrollHeight, messagesEl.clientHeight);
+  });
 
   // ---------- permission card ----------
 
@@ -1598,7 +1621,7 @@
     }
     el.appendChild(actions);
     messagesEl.appendChild(el);
-    scrollToBottom();
+    forceScrollToBottom(); // a pending permission must be visible (#16)
   }
 
   // ---------- question card (ask_user_question) ----------
@@ -1732,7 +1755,7 @@
     el.appendChild(skip);
 
     messagesEl.appendChild(el);
-    scrollToBottom();
+    forceScrollToBottom(); // a pending question must be visible (#16)
   }
 
   // Extract the text payload from a tool_call_update's content array
@@ -2380,6 +2403,7 @@
         drainPlanHistory(state.userMsgCount);
         state.userMsgCount += 1;
         addMessage("user", msg.text, msg.chips || []);
+        forceScrollToBottom(); // jump back to the bottom on the user's own send (#16)
         // If the indicator is showing and a NEW (live-send) user message comes
         // in, hide it. (When the host posts a userMessage as part of the verdict
         // flow, it then immediately posts planProcessing, which re-shows it
