@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.4 — 2026-06-14
+## 1.4.4 — 2026-06-15
 
 > You can read history again while Grok is thinking.
 
