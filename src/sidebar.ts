@@ -2002,7 +2002,8 @@ See design doc for the full state machine diagram.`;
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; media-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';" />
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; media-src ${webview.cspSource} data:; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
+<link rel="stylesheet" href="${mediaUri("katex/katex.min.css")}" />
 <link rel="stylesheet" href="${mediaUri("chat.css")}" />
 </head>
 <body>
@@ -2053,6 +2054,7 @@ See design doc for the full state machine diagram.`;
     <div id="slash-popover" class="slash-popover" hidden></div>
   </footer>
 
+  <script nonce="${nonce}" src="${mediaUri("katex/katex.min.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("webview-helpers.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("chat.js")}"></script>
 </body>

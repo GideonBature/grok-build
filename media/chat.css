@@ -1501,3 +1501,24 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   align-items: center;
   color: var(--vscode-descriptionForeground);
 }
+
+/* ---- LaTeX / KaTeX math ---- */
+/* Inherit the chat color so equations match surrounding prose, and tame
+   KaTeX's default 1.21em so inline math sits at body size. */
+.katex { font-size: 1.05em; color: inherit; }
+/* Display math gets its own block; allow horizontal scroll so a wide matrix or
+   long equation doesn't blow out the narrow sidebar width. */
+.katex-display {
+  margin: 0.5em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+.katex-display > .katex { font-size: 1.1em; }
+/* Fallback when KaTeX can't render (or isn't loaded): show the raw TeX in a
+   monospace tint rather than blanking it. */
+.math-raw {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-textPreformat-foreground);
+}
+.math-raw.math-display { display: block; margin: 0.5em 0; white-space: pre-wrap; }

@@ -112,7 +112,7 @@ The full pedagogical write-up lives in
 | [src/voice-recorder.ts](../src/voice-recorder.ts) | Batch capture (`ffmpeg` → WAV) + STT REST upload |
 | [src/voice-streamer.ts](../src/voice-streamer.ts) | Live capture (ffmpeg PCM → WebSocket STT) |
 | [media/chat.{js,css}](../media/) | Webview UI |
-| [media/webview-helpers.js](../media/webview-helpers.js) | Pure webview helpers (file-ref detection, relative-time, mic-button state machine, trailing send-phrase highlight, and the deferred subagent classifier `isSubagentToolCall`/`subagentLabel`) — shared between webview and tests |
+| [media/webview-helpers.js](../media/webview-helpers.js) | Pure webview helpers (file-ref detection, relative-time, mic-button state machine, trailing send-phrase highlight, math extraction `splitMath`/`stripUnsupportedTex`, and the deferred subagent classifier `isSubagentToolCall`/`subagentLabel`) — shared between webview and tests |
 
 ## Design choices worth knowing
 
@@ -140,3 +140,13 @@ The full pedagogical write-up lives in
   image-vs-video by extension, and serves it to the webview via `asWebviewUri`
   (streamed from disk) so even a multi-MB video renders. See
   [research/image-generation.md](../research/image-generation.md).
+- **Math renders via vendored KaTeX, extracted before HTML-escaping.** Grok
+  answers with TeX (inline `\(…\)`, display `\[…\]`, `\begin{pmatrix}` matrices).
+  The pure `splitMath` pulls math spans out *before* the markdown pass escapes
+  HTML — so backslashes and braces survive into placeholders, mirroring the
+  code-block/table extraction — and `renderMath` in `chat.js` renders each span
+  with [KaTeX](https://katex.org) (`media/katex/`, woff2-only fonts, no network,
+  `throwOnError:false`). `stripUnsupportedTex` drops `\label{…}` first (KaTeX has
+  no `\ref`/`\eqref`, so it would paint a red error; `\label` is invisible in real
+  LaTeX anyway). Single `$…$` is deliberately not a delimiter — it false-matches
+  prose currency.

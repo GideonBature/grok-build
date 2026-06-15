@@ -415,3 +415,62 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
     expect(types(h.posted)).toContain("showLogs");
   });
 });
+
+// LaTeX rendering: grok now emits TeX (\(...\) inline, \[...\] display). The
+// webview pulls math out before HTML-escaping and renders it via KaTeX. KaTeX
+// isn't loaded in the happy-dom harness, so renderMarkdown falls back to the
+// escaped raw TeX (.math-raw) — which is exactly what proves the extract/restore
+// pipeline runs and that the backslashes survive the inline-markdown pass.
+describe("LaTeX math rendering", () => {
+  // promptComplete forces a synchronous flushAgent so the markdown is in the DOM.
+  const renderAgent = (text: string) => {
+    const { doc, window } = bootWebview();
+    dispatch(window, { type: "messageChunk", text });
+    dispatch(window, { type: "promptComplete" });
+    return doc.querySelector(".msg.agent") as HTMLElement;
+  };
+
+  it("renders inline \\(...\\) math as a math node, not raw delimiters", () => {
+    const el = renderAgent("The area is \\(\\pi r^2\\) exactly.");
+    const math = el.querySelector(".math-raw");
+    expect(math).not.toBeNull();
+    expect(math!.textContent).toBe("\\pi r^2");
+    // the literal delimiters must NOT survive into the rendered text
+    expect(el.textContent).not.toContain("\\(");
+    expect(el.textContent).not.toContain("\\)");
+  });
+
+  it("renders display \\[...\\] math as a block", () => {
+    const el = renderAgent("Result:\n\\[E = mc^2\\]\ndone");
+    const math = el.querySelector(".math-raw.math-display");
+    expect(math).not.toBeNull();
+    expect(math!.textContent).toBe("E = mc^2");
+  });
+
+  it("preserves a matrix (backslashes + braces) through the markdown pipeline", () => {
+    const el = renderAgent("\\[\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}\\]");
+    const math = el.querySelector(".math-raw.math-display") as HTMLElement;
+    expect(math).not.toBeNull();
+    expect(math.textContent).toContain("\\begin{pmatrix}");
+    expect(math.textContent).toContain("&");
+  });
+
+  it("leaves prose with bare dollar amounts untouched", () => {
+    const el = renderAgent("it costs $5 and then $10");
+    expect(el.querySelector(".math-raw")).toBeNull();
+    expect(el.textContent).toContain("it costs $5 and then $10");
+  });
+
+  it("strips \\label{...} so an align block doesn't render a red error (KaTeX has no \\ref)", () => {
+    const el = renderAgent(
+      "\\[\\begin{align} f(x) &= x^2 \\label{eq:quadratic} \\\\ f'(x) &= 2x \\end{align}\\]",
+    );
+    const math = el.querySelector(".math-raw.math-display") as HTMLElement;
+    expect(math).not.toBeNull();
+    // the unsupported \label macro is gone, the equation body survives
+    expect(math.textContent).not.toContain("\\label");
+    expect(math.textContent).not.toContain("eq:quadratic");
+    expect(math.textContent).toContain("\\begin{align}");
+    expect(math.textContent).toContain("f(x) &= x^2");
+  });
+});

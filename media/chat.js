@@ -247,7 +247,28 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex } = globalThis.GrokWebviewHelpers;
+
+  // Render one LaTeX span to HTML via the vendored KaTeX (loaded before this
+  // script as a global). throwOnError:false makes KaTeX emit a red inline error
+  // node instead of throwing, so a single bad expression never blanks the whole
+  // message. If KaTeX isn't present (e.g. happy-dom unit tests), fall back to the
+  // escaped raw TeX so the text is at least readable.
+  function renderMath(latex, display) {
+    const k = globalThis.katex;
+    const src = stripUnsupportedTex(latex == null ? "" : String(latex)).trim();
+    if (k && typeof k.renderToString === "function") {
+      try {
+        return k.renderToString(src, { displayMode: !!display, throwOnError: false });
+      } catch (_) {
+        // fall through to the raw fallback
+      }
+    }
+    const esc = escapeHtml(src);
+    return display
+      ? `<span class="math-raw math-display">${esc}</span>`
+      : `<span class="math-raw">${esc}</span>`;
+  }
 
   function renderDiffCode(code) {
     const lines = code.replace(/\n+$/, "").split("\n");
@@ -281,6 +302,19 @@
       );
       return `\x00B${i}\x00`;
     });
+
+    // Pull LaTeX out before any HTML-escaping or inline-markdown — math is full
+    // of \ { } & < > * _ that the inline() pass would mangle. Display math gets a
+    // \x00D placeholder (handled as its own block, like tables); inline math gets
+    // \x00M. Both restore from the same mathHtml array at the end. Runs after
+    // code-block extraction so a \( inside a fenced block stays literal.
+    const mathHtml = [];
+    s = splitMath(s).map((seg) => {
+      if (seg.type !== "math") return seg.value;
+      const i = mathHtml.length;
+      mathHtml.push(renderMath(seg.value, seg.display));
+      return seg.display ? `\x00D${i}\x00` : `\x00M${i}\x00`;
+    }).join("");
 
     function inline(t) {
       return t
@@ -401,6 +435,17 @@
         continue;
       }
 
+      // Display math alone on a line → emit as its own block (no paragraph wrap).
+      const dm = line.trim().match(/^\x00D(\d+)\x00$/);
+      if (dm) {
+        closeFrom(0);
+        out += `\x00D${dm[1]}\x00`;
+        lastWasBlock = true;
+        lastPara = false;
+        pendingBreak = false;
+        continue;
+      }
+
       const hm = line.match(/^(#{1,3}) (.+)$/);
       if (hm) {
         closeFrom(0);
@@ -452,7 +497,9 @@
     closeFrom(0);
     return out
       .replace(/\x00B(\d+)\x00/g, (_, i) => codeBlocks[+i])
-      .replace(/\x00T(\d+)\x00/g, (_, i) => tables[+i]);
+      .replace(/\x00T(\d+)\x00/g, (_, i) => tables[+i])
+      .replace(/\x00D(\d+)\x00/g, (_, i) => mathHtml[+i])
+      .replace(/\x00M(\d+)\x00/g, (_, i) => mathHtml[+i]);
   }
 
   // ---------- popovers ----------

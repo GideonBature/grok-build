@@ -152,6 +152,13 @@ Every action Grok takes appears in chat — a single flat row ("Read sidebar.ts 
 </details>
 
 <details>
+<summary><strong>Math &amp; LaTeX rendering</strong> — equations render as math, not raw TeX</summary>
+
+When Grok answers with LaTeX — inline `\(…\)`, display `\[…\]`, and environments like `\begin{pmatrix}` matrices, `cases`, integrals, sums, and Greek — the chat renders it as real typeset math via [KaTeX](https://katex.org), vendored into the extension so it works **offline with no network**. Display equations get their own block with horizontal scroll so a wide matrix doesn't overflow the narrow sidebar; a malformed expression shows a small inline error instead of blanking the message, and `\label{…}` (which KaTeX can't cross-reference) is stripped so it never paints a red error into an otherwise-fine equation. Bare `$…$` is intentionally **not** a delimiter — it would mangle prose like "it costs $5 and then $10".
+
+</details>
+
+<details>
 <summary><strong>Model picker</strong> — switch models live, no restart</summary>
 
 Click the model name in the gear popover. The list comes from the CLI's `session/new` response; switching is live (`session/set_model`) with no restart when the target model belongs to the same agent.

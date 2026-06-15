@@ -171,7 +171,44 @@
     return distanceFromBottom <= t;
   }
 
-  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom };
+  // Split a string into text/math segments so the markdown renderer can pull
+  // LaTeX out before HTML-escaping (math is full of \ { } & < > * _, which the
+  // inline-markdown pass would otherwise mangle). grok emits TeX with backslash
+  // delimiters — `\(...\)` inline and `\[...\]` display (confirmed against the
+  // CLI), plus the conventional `$$...$$` for display. Single `$...$` is NOT a
+  // delimiter: too many false positives with prose currency ("$5 and $10").
+  // Each math segment carries `display` (block vs inline). Non-greedy + requires
+  // at least one char so empty `\(\)`/`$$$$` stays literal text. Pure so it's
+  // unit-testable; the actual KaTeX render lives in chat.js (impure global).
+  function splitMath(text) {
+    const src = text == null ? "" : String(text);
+    const segs = [];
+    const re = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$\$([\s\S]+?)\$\$/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      if (m.index > last) segs.push({ type: "text", value: src.slice(last, m.index) });
+      if (m[1] !== undefined) segs.push({ type: "math", value: m[1], display: true });
+      else if (m[2] !== undefined) segs.push({ type: "math", value: m[2], display: false });
+      else segs.push({ type: "math", value: m[3], display: true });
+      last = re.lastIndex;
+    }
+    if (last < src.length) segs.push({ type: "text", value: src.slice(last) });
+    return segs;
+  }
+
+  // Drop TeX macros KaTeX can't handle before rendering, so one unsupported
+  // command doesn't paint a red error into an otherwise-fine equation. grok
+  // emits `\label{...}` inside align/equation blocks for cross-referencing, but
+  // KaTeX has no \ref/\eqref system so it renders \label as a red error token —
+  // even though \label produces NO visible output in real LaTeX (it only sets a
+  // reference target). Stripping it loses nothing visually and lets the
+  // surrounding equation render. Pure so it's unit-testable.
+  function stripUnsupportedTex(tex) {
+    return (tex == null ? "" : String(tex)).replace(/\\label\s*\{[^}]*\}/g, "");
+  }
+
+  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — plain JS module, no types
-import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom } from "../media/webview-helpers.js";
+import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex } from "../media/webview-helpers.js";
 
 describe("looksLikeFileRef", () => {
   it("accepts a bare filename with a known extension", () => {
@@ -345,5 +345,103 @@ describe("shouldStickToBottom", () => {
     // 150px from bottom: pinned only with a generous threshold
     expect(shouldStickToBottom(750, 1000, 100, 200)).toBe(true);
     expect(shouldStickToBottom(750, 1000, 100, 50)).toBe(false);
+  });
+});
+
+describe("splitMath", () => {
+  it("returns the whole string as one text segment when there is no math", () => {
+    expect(splitMath("just plain prose with no tex")).toEqual([
+      { type: "text", value: "just plain prose with no tex" },
+    ]);
+  });
+
+  it("extracts inline \\(...\\) math with display:false", () => {
+    expect(splitMath("the value \\(x^2\\) here")).toEqual([
+      { type: "text", value: "the value " },
+      { type: "math", value: "x^2", display: false },
+      { type: "text", value: " here" },
+    ]);
+  });
+
+  it("extracts display \\[...\\] math with display:true", () => {
+    expect(splitMath("before\n\\[E = mc^2\\]\nafter")).toEqual([
+      { type: "text", value: "before\n" },
+      { type: "math", value: "E = mc^2", display: true },
+      { type: "text", value: "\nafter" },
+    ]);
+  });
+
+  it("treats $$...$$ as display math", () => {
+    expect(splitMath("$$a+b$$")).toEqual([
+      { type: "math", value: "a+b", display: true },
+    ]);
+  });
+
+  it("handles multiple math spans in one string", () => {
+    const segs = splitMath("\\(a\\) and \\(b\\) then \\[c\\]");
+    expect(segs.map((s) => s.type)).toEqual(["math", "text", "math", "text", "math"]);
+    expect(segs.filter((s) => s.type === "math").map((s) => s.display)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  it("supports multi-line display math (e.g. matrices)", () => {
+    const src = "\\[\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}\\]";
+    const segs = splitMath(src);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].type).toBe("math");
+    expect(segs[0].display).toBe(true);
+    expect(segs[0].value).toContain("\\begin{pmatrix}");
+  });
+
+  it("does NOT treat bare dollar amounts as math", () => {
+    expect(splitMath("it costs $5 and then $10 total")).toEqual([
+      { type: "text", value: "it costs $5 and then $10 total" },
+    ]);
+  });
+
+  it("leaves empty delimiters as literal text", () => {
+    expect(splitMath("a \\(\\) b")).toEqual([
+      { type: "text", value: "a \\(\\) b" },
+    ]);
+  });
+
+  it("coerces null/undefined to an empty result", () => {
+    expect(splitMath(null)).toEqual([]);
+    expect(splitMath(undefined)).toEqual([]);
+  });
+});
+
+describe("stripUnsupportedTex", () => {
+  it("removes \\label{...} (KaTeX can't render it — shows a red error otherwise)", () => {
+    expect(stripUnsupportedTex("f(x) = x^2 \\label{eq:quadratic} + 1")).toBe(
+      "f(x) = x^2  + 1",
+    );
+  });
+
+  it("strips every \\label in an align block, leaving the equations intact", () => {
+    const src =
+      "\\begin{align} a &= b \\label{one} \\\\ c &= d \\label{two} \\end{align}";
+    const out = stripUnsupportedTex(src);
+    expect(out).not.toContain("\\label");
+    expect(out).toContain("\\begin{align}");
+    expect(out).toContain("a &= b");
+    expect(out).toContain("c &= d");
+  });
+
+  it("tolerates whitespace before the brace", () => {
+    expect(stripUnsupportedTex("x \\label {foo} y")).toBe("x  y");
+  });
+
+  it("leaves math without \\label unchanged", () => {
+    const src = "\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}";
+    expect(stripUnsupportedTex(src)).toBe(src);
+  });
+
+  it("coerces null/undefined to an empty string", () => {
+    expect(stripUnsupportedTex(null)).toBe("");
+    expect(stripUnsupportedTex(undefined)).toBe("");
   });
 });
