@@ -856,10 +856,11 @@ See design doc for the full state machine diagram.`;
     this.post({ type: "modeChanged", modeId: "agent" });
     if (resumeId) this.post({ type: "clearMessages" });
 
-    // Lock the composer (spinner, disabled) for the whole session-start window —
-    // start() + newSession()/load + primer — so a prompt can't be sent before
-    // the session exists, which would otherwise throw "no session". primeGrok
-    // clears it on success; the failure paths below clear it too.
+    // Lock the composer (spinner, disabled) for the session-start window —
+    // start() + newSession()/load — so a prompt can't be sent before the session
+    // exists, which would otherwise throw "no session". The primer is NOT sent
+    // here; it's deferred to the first real send (ensurePrimed). The success path
+    // unlocks once the session is live (below); the failure paths clear it too.
     this.post({ type: "setBusy", value: true, locked: true });
 
     const cfg = vscode.workspace.getConfiguration("grok");
