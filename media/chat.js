@@ -2117,17 +2117,23 @@
       subtitle.textContent = `${diff.path} — ${oldLines} → ${newLines} lines`;
       el.appendChild(subtitle);
 
-      const preview = document.createElement("button");
-      preview.className = "preview-link";
-      preview.textContent = "open diff preview →";
-      preview.onclick = () =>
+      const openDiff = () =>
         vscode.postMessage({
           type: "openDiff",
           path: diff.path,
           oldText: diff.oldText,
           newText: diff.newText,
+          requestId: req.id,
         });
+      const preview = document.createElement("button");
+      preview.className = "preview-link";
+      // Auto-opens below; the button stays so you can re-open if you closed it.
+      preview.textContent = "open diff →";
+      preview.onclick = openDiff;
       el.appendChild(preview);
+      // Open the diff automatically when the card appears, so reviewing an edit
+      // is one glance + one click on the decision — no "open diff" step (#21).
+      openDiff();
     }
 
     const actions = document.createElement("div");

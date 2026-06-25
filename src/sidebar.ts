@@ -60,7 +60,7 @@ type WebviewMsg =
   | { type: "toggleChip"; id: string }
   | { type: "openFile"; path: string }
   | { type: "openUrl"; url: string }
-  | { type: "openDiff"; path: string; oldText: string; newText: string }
+  | { type: "openDiff"; path: string; oldText: string; newText: string; requestId?: number | string }
   | { type: "exportExpr"; action: string; kind: string; current?: string; svg?: string; png?: string; svgDark?: string; svgLight?: string }
   | { type: "setEffort"; level: string }
   | { type: "openGlobalConfig" }
@@ -105,6 +105,31 @@ const execFileAsync = promisify(execFile);
 // see research/plan-mode.md). The UI labels it "Agent"; the wire calls it
 // "default".
 const ACT_MODE_ID = "default";
+
+// Scheme for the permission-card diff preview's virtual documents. Backing the
+// before/after sides with a read-only content provider (rather than untitled
+// scratch buffers) means the diff tab never goes "dirty", so closing it doesn't
+// prompt to save (issue #21). The path keeps the real filename so VS Code infers
+// the language for syntax highlighting.
+const GROK_DIFF_SCHEME = "grok-diff";
+
+/**
+ * Read-only content provider for the diff-preview virtual documents. Content is
+ * stored per-URI and served verbatim; the documents are never editable or dirty,
+ * so the diff tab closes without a save prompt. Pure VS Code glue.
+ */
+class GrokDiffContentProvider implements vscode.TextDocumentContentProvider {
+  private readonly contents = new Map<string, string>();
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.contents.get(uri.toString()) ?? "";
+  }
+  set(uri: vscode.Uri, content: string): void {
+    this.contents.set(uri.toString(), content);
+  }
+  delete(...uris: vscode.Uri[]): void {
+    for (const uri of uris) this.contents.delete(uri.toString());
+  }
+}
 
 /** Best-effort MIME from a file extension, for inlining generated media. */
 function guessMediaMime(p: string): string {
@@ -183,11 +208,22 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
   // later manual re-upgrade that breaks again gets downgraded again.
   private reactiveDowngradeInFlight = false;
 
+  // Diff-preview plumbing (issue #21): a read-only content provider backs the
+  // before/after sides (no save prompt on close), a monotonic counter keeps each
+  // diff's virtual URIs unique, and openDiffsByRequest maps a pending permission
+  // request → its diff URIs so the tab can be auto-closed when the user answers.
+  private readonly diffProvider = new GrokDiffContentProvider();
+  private diffSeq = 0;
+  private readonly openDiffsByRequest = new Map<string, { left: vscode.Uri; right: vscode.Uri }>();
+
   constructor(
     private context: vscode.ExtensionContext,
     output: vscode.OutputChannel,
   ) {
     this.output = output;
+    context.subscriptions.push(
+      vscode.workspace.registerTextDocumentContentProvider(GROK_DIFF_SCHEME, this.diffProvider),
+    );
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -1574,7 +1610,7 @@ See design doc for the full state machine diagram.`;
         void vscode.env.openExternal(vscode.Uri.parse(msg.url));
         break;
       case "openDiff":
-        await this.openDiffEditor(msg.path, msg.oldText, msg.newText);
+        await this.openDiffEditor(msg.path, msg.oldText, msg.newText, msg.requestId);
         break;
       case "exportExpr":
         await this.exportExpr(msg);
@@ -1584,6 +1620,7 @@ See design doc for the full state machine diagram.`;
         break;
       case "permissionAnswer":
         this.focused.client?.respondPermission(msg.requestId, msg.optionId);
+        this.closeDiffForRequest(msg.requestId); // tidy up the auto-opened diff (#21)
         this.setStatus(this.focused, "working"); // turn resumes after the answer
         break;
       case "exitPlanAnswer":
@@ -2265,20 +2302,58 @@ See design doc for the full state machine diagram.`;
     }
   }
 
-  private async openDiffEditor(filePath: string, oldText: string, newText: string): Promise<void> {
-    const tmp = vscode.Uri.parse(`untitled:${filePath}.before`);
-    const after = vscode.Uri.file(filePath);
-    // Write oldText into a virtual untitled doc, then diff against the file on disk that contains newText.
-    const beforeDoc = await vscode.workspace.openTextDocument({ content: oldText, language: "plaintext" });
-    const afterDoc = await vscode.workspace.openTextDocument({ content: newText, language: "plaintext" });
+  private async openDiffEditor(
+    filePath: string,
+    oldText: string,
+    newText: string,
+    requestId?: number | string,
+  ): Promise<void> {
+    const base = path.basename(filePath);
+    // Unique key per diff so sequential edits to the same file don't collide on
+    // the content map. The trailing real filename gives VS Code the language.
+    const key = String(this.diffSeq++);
+    const left = vscode.Uri.from({ scheme: GROK_DIFF_SCHEME, path: `/${key}/before/${base}` });
+    const right = vscode.Uri.from({ scheme: GROK_DIFF_SCHEME, path: `/${key}/after/${base}` });
+    this.diffProvider.set(left, oldText);
+    this.diffProvider.set(right, newText);
+    if (requestId !== undefined) {
+      // Auto-open is per pending permission; remember the URIs so the matching
+      // tab can be closed (and its content dropped) once the user decides (#21).
+      this.closeDiffForRequest(requestId); // drop a stale diff for the same request first
+      this.openDiffsByRequest.set(String(requestId), { left, right });
+    }
+    // preview:true reuses a single preview tab across grok's many small sequential
+    // edits; preserveFocus:true keeps focus on the chat so the permission card is
+    // immediately clickable.
     await vscode.commands.executeCommand(
       "vscode.diff",
-      beforeDoc.uri,
-      afterDoc.uri,
-      `Grok proposed: ${path.basename(filePath)}`,
+      left,
+      right,
+      `Grok proposed: ${base}`,
+      { preview: true, preserveFocus: true } as vscode.TextDocumentShowOptions,
     );
-    // (tmp/after refs intentionally unused — we use openTextDocument's auto URIs)
-    void tmp; void after;
+  }
+
+  /** Close the diff tab opened for a pending permission request and free its
+   *  virtual content (issue #21). No-op if the user already closed it. */
+  private closeDiffForRequest(requestId: number | string): void {
+    const k = String(requestId);
+    const uris = this.openDiffsByRequest.get(k);
+    if (!uris) return;
+    this.openDiffsByRequest.delete(k);
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const input = tab.input;
+        if (
+          input instanceof vscode.TabInputTextDiff &&
+          input.original.toString() === uris.left.toString() &&
+          input.modified.toString() === uris.right.toString()
+        ) {
+          void vscode.window.tabGroups.close(tab);
+        }
+      }
+    }
+    this.diffProvider.delete(uris.left, uris.right);
   }
 
   private async postExitPlanRequest(req: ExitPlanRequest, session: Session, gen: number): Promise<void> {
