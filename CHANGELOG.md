@@ -6,7 +6,7 @@
 
 ### Features
 
-- **Permission-card diffs auto-open, don't nag to save, and clean up after themselves (#21).** When Grok asks to edit a file, the diff now **opens automatically** as the permission card appears — no more clicking *open diff preview →* first (the button stays, to re-open it). Closing the diff **no longer prompts you to save**: the preview is backed by read-only virtual documents instead of scratch buffers, so there's nothing to save (and you also get proper syntax highlighting now). And when you click **Allow / Reject** on the card, the **diff tab closes by itself**. The preview reuses a single tab across Grok's many small sequential edits and keeps focus on the chat, so reviewing a stream of edits is just: glance, decide on the card, repeat. ([src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js))
+- **Diff previews don't nag you to save, auto-open, and clean up after themselves (#21).** Closing a diff preview **no longer prompts you to save**: every diff the extension opens — whether from the *open diff preview →* link on an edit card or auto-opened on a permission card — is now backed by read-only virtual documents instead of scratch buffers, so there's nothing to save (and you also get proper syntax highlighting now). On a permission card the diff also **opens automatically** (the *open diff →* button stays, to re-open it) and **closes itself** when you click **Allow / Reject**. The preview reuses a single tab across Grok's many small sequential edits and keeps focus on the chat, so reviewing a stream of edits is just: glance, decide, repeat. ([src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js))
 
 ## 1.4.13 — 2026-06-25
 
