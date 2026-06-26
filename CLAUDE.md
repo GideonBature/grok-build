@@ -148,7 +148,7 @@ It reads the version from `package.json`, runs the gate, builds the vsix, commit
 
 What the script encodes, step by step:
 
-1. Bump `version` in `package.json` (user-initiated) and add the dated section to `CHANGELOG.md`. As part of this pass, **review the other release-facing docs for staleness**: `README.md` (features/screenshots/install matrix), `TESTS.md` (test plan vs. what actually ships), and `package.json` itself (description, `engines`, `categories`, `contributes`). CLAUDE.md deliberately avoids hardcoding the version — it points here, so it doesn't need a per-release edit.
+1. Bump `version` in `package.json` (user-initiated) and add the dated section to `CHANGELOG.md`. As part of this pass, **review the other release-facing docs for staleness**: `README.md` (features/screenshots/install matrix), `TESTS.md` (test plan vs. what actually ships), and `package.json` itself (description, `engines`, `categories`, `contributes`). CLAUDE.md deliberately avoids hardcoding the version — it points here, so it doesn't need a per-release edit. Keep `CHANGELOG.md` entries **terse** (1–3 bullets per release under Added/Changed/Fixed; deep detail belongs in commits / `research/`, not the changelog); releases before the current minor live in `docs/CHANGELOG-ARCHIVE.md` (linked from the foot of `CHANGELOG.md`).
 2. `npm test` (532-test floor, all green) + `tsc -p . --noEmit` clean, **and `npm run test:live` against real grok — mandatory, run without asking** (the `release.*` scripts don't run it, so run it by hand before invoking them).
 3. Commit + push to `main` (direct-to-main, no feature branches).
 4. **Annotated git tag** `vX.Y.Z` at the release commit → `git tag -a vX.Y.Z -m "Release vX.Y.Z"` → `git push origin vX.Y.Z`.

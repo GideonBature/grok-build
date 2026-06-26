@@ -667,7 +667,7 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
     const h = boot();
     click(h.window, $(h.doc, "gear-btn"));
     const labels = items(h.doc).map((el) => el.textContent || "");
-    expect(labels.some((l) => l.includes("About"))).toBe(true);
+    expect(labels.some((l) => l.includes("Version & about"))).toBe(true);
     expect(labels.some((l) => l.includes("Config & debug"))).toBe(true);
     expect(labels.some((l) => l.includes("Log out"))).toBe(true);
     // the old standalone items no longer live on the main view
@@ -678,7 +678,7 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
   it("About shows both versions and requests an update check", () => {
     const h = boot();
     click(h.window, $(h.doc, "gear-btn"));
-    click(h.window, itemByText(h.doc, "About"));
+    click(h.window, itemByText(h.doc, "Version & about"));
 
     const text = gear(h.doc).textContent || "";
     expect(text).toContain("This extension");
@@ -691,7 +691,7 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
   it("enables Update Grok Build when an update is available and posts updateGrok", () => {
     const h = boot();
     click(h.window, $(h.doc, "gear-btn"));
-    click(h.window, itemByText(h.doc, "About"));
+    click(h.window, itemByText(h.doc, "Version & about"));
     dispatch(h.window, { type: "grokUpdateStatus", current: "0.2.3", latest: "0.2.33", updateAvailable: true });
 
     expect(gear(h.doc).textContent).toContain("Update available");
@@ -706,7 +706,7 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
   it("shows a grayed up-to-date status and no update action when current", () => {
     const h = boot();
     click(h.window, $(h.doc, "gear-btn"));
-    click(h.window, itemByText(h.doc, "About"));
+    click(h.window, itemByText(h.doc, "Version & about"));
     dispatch(h.window, { type: "grokUpdateStatus", current: "0.2.33", latest: "0.2.33", updateAvailable: false });
 
     expect(gear(h.doc).textContent).toContain("up to date");
@@ -719,7 +719,7 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
     // No `initialized` version (native Windows build) — the panel starts at "—".
     dispatch(h.window, { type: "session", sessionId: "s1", models: [], currentModelId: "grok-build" });
     click(h.window, $(h.doc, "gear-btn"));
-    click(h.window, itemByText(h.doc, "About"));
+    click(h.window, itemByText(h.doc, "Version & about"));
     dispatch(h.window, { type: "grokUpdateStatus", current: "0.2.3", latest: "0.2.3", updateAvailable: false });
 
     const text = gear(h.doc).textContent || "";
@@ -731,8 +731,8 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
   it("the About back row returns to the main menu", () => {
     const h = boot();
     click(h.window, $(h.doc, "gear-btn"));
-    click(h.window, itemByText(h.doc, "About"));
-    click(h.window, itemByText(h.doc, "← About"));
+    click(h.window, itemByText(h.doc, "Version & about"));
+    click(h.window, itemByText(h.doc, "← Version & about"));
     expect(items(h.doc).some((el) => (el.textContent || "").includes("Config & debug"))).toBe(true);
   });
 

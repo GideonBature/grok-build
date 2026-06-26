@@ -127,7 +127,13 @@ code {
   padding: 32px 12px;
   gap: 8px;
 }
-.welcome-mark { width: 56px; height: 56px; opacity: 0.9; }
+.welcome-mark {
+  width: 56px; height: 56px; opacity: 0.9;
+  display: inline-block;
+  background-color: var(--vscode-foreground);
+  -webkit-mask: var(--welcome-mark) center / contain no-repeat;
+  mask: var(--welcome-mark) center / contain no-repeat;
+}
 .welcome h2 { margin: 0; font-weight: 600; }
 .welcome-byline { margin: 0; font-size: 11px; }
 .muted-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
@@ -969,6 +975,11 @@ textarea#input {
 .popover-action { color: var(--vscode-textLink-foreground); }
 .popover-action.disabled { color: var(--vscode-descriptionForeground); opacity: 0.55; cursor: default; pointer-events: none; }
 .popover-action.disabled:hover { background: transparent; }
+/* Version & about panel: separators, tagline, repo link, trademark fine print. */
+.popover-sep { height: 0; border-top: 1px solid var(--vscode-editorWidget-border); margin: 4px 0; }
+.popover-muted { color: var(--vscode-descriptionForeground); }
+.popover-gh { display: inline-flex; align-items: center; gap: 6px; }
+.popover-fineprint { padding: 6px 10px; font-size: 11px; line-height: 1.45; color: var(--vscode-descriptionForeground); }
 
 .mode-item-icon {
   flex-shrink: 0;

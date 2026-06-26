@@ -2847,9 +2847,9 @@ See design doc for the full state machine diagram.`;
 
   <main id="messages" class="messages">
     <div class="welcome" id="welcome">
-      <img src="${resourceUri("grok-mark-light.svg")}" alt="Grok" class="welcome-mark" />
-      <h2>Grok Build</h2>
-      <p class="welcome-byline muted">by Paweł Huryn (<a href="https://www.productcompass.pm" class="muted-link">productcompass.pm</a>)</p>
+      <span class="welcome-mark" role="img" aria-label="Grok" style="--welcome-mark:url('${resourceUri("grok-icon.svg")}')"></span>
+      <h2>Grok Build (Unofficial)</h2>
+      <p class="welcome-byline muted">by Paweł Huryn (<a href="https://www.productcompass.pm/" class="muted-link">The Product Compass</a>), <a href="#" id="welcome-about-link" class="muted-link">about</a></p>
       <p id="welcome-version" class="muted loading-dots">Starting</p>
       <div id="welcome-onboarding"></div>
     </div>

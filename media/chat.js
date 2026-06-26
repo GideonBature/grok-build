@@ -917,6 +917,13 @@
     gearPopover.appendChild(el);
   }
 
+  // A thin horizontal divider between sections of a popover panel.
+  function addGearSep() {
+    const el = document.createElement("div");
+    el.className = "popover-sep";
+    gearPopover.appendChild(el);
+  }
+
   function renderGearMain() {
     state.gearView = "main";
     gearPopover.innerHTML = "";
@@ -981,7 +988,7 @@
     // Collapses the former Config / Account / Debug sections into sub-views
     // (mirrors the Model picker), keeping the main menu short.
     addSection("Other");
-    addGearItem('<span>About</span><span class="popover-chevron">›</span>', () => renderAboutPanel(true));
+    addGearItem('<span>Version &amp; about</span><span class="popover-chevron">›</span>', () => renderAboutPanel(true));
     addGearItem('<span>Config &amp; debug</span><span class="popover-chevron">›</span>', () => renderConfigDebugPanel());
     addGearItem("<span>Log out</span>", () => {
       vscode.postMessage({ type: "logout" });
@@ -1000,18 +1007,25 @@
     }
     const u = state.grokUpdate || {};
     gearPopover.innerHTML = "";
-    addGearItem('<span class="popover-back">← About</span>', renderGearMain);
+    addGearItem('<span class="popover-back">← Version &amp; about</span>', renderGearMain);
+
+    // Updates can be paused for compatibility (issue #22): the host blocks moving
+    // the CLI onto an unsupported build on Windows.
+    const blocked = u.policy && u.policy.allow === false;
+
+    // ── Compatibility note (top) ─────────────────────────────────────────
+    if (blocked) {
+      addGearInfo(`<span class="popover-warn">${escapeHtml(u.policy.note || "Updates are paused for compatibility.")}</span>`);
+      addGearSep();
+    }
+
+    // ── Versions + update status ─────────────────────────────────────────
     addGearInfo(`<span>This extension</span><span class="popover-ver">v${escapeHtml(state.extVersion || "?")}</span>`);
     // The CLI version comes from the ACP `initialize` handshake, but the native
     // Windows build doesn't report one there — so fall back to the version the
     // update check returns (its `currentVersion`), which is always populated.
     const cliVer = state.cliVersion || u.current || "";
     addGearInfo(`<span>Grok Build CLI</span><span class="popover-ver">${cliVer ? "v" + escapeHtml(cliVer) : "—"}</span>`);
-
-    // Updates can be paused for compatibility (issue #22): the host blocks moving
-    // the CLI onto an unsupported build on Windows. When blocked, the action is
-    // shown disabled with the reason instead of an active button.
-    const blocked = u.policy && u.policy.allow === false;
 
     let statusHtml, canUpdate = false;
     if (u.checking) {
@@ -1032,13 +1046,12 @@
     addGearInfo(statusHtml);
 
     if (blocked) {
-      // Disabled action + the reason, so it's clear updates are intentionally held.
+      // Disabled action — the reason note is shown at the top.
       const btn = document.createElement("div");
       btn.className = "toolbar-popover-item popover-action disabled";
       btn.setAttribute("aria-disabled", "true");
       btn.innerHTML = "<span>Update Grok Build CLI</span>";
       gearPopover.appendChild(btn);
-      addGearInfo(`<span class="popover-warn">${escapeHtml(u.policy.note || "Updates are paused for compatibility.")}</span>`);
     } else if (canUpdate) {
       // The update action only appears when there's actually something to do —
       // when the CLI is up to date the grayed status line above says so on its own.
@@ -1048,6 +1061,24 @@
       btn.onclick = (e) => { e.stopPropagation(); vscode.postMessage({ type: "updateGrok" }); closePopovers(); };
       gearPopover.appendChild(btn);
     }
+
+    // ── Unofficial + trademark fine print ────────────────────────────────
+    addGearSep();
+    const fine = document.createElement("div");
+    fine.className = "popover-fineprint";
+    fine.textContent =
+      "Unofficial · community-built · MIT. " +
+      "A VS Code UI for xAI’s Grok Build CLI - not affiliated with or endorsed by xAI. " +
+      "Grok, Grok Build, and xAI are trademarks of xAI; this project uses those names only to describe what it’s compatible with.";
+    gearPopover.appendChild(fine);
+
+    // ── Repository link (bottom) ─────────────────────────────────────────
+    addGearSep();
+    const ghIcon = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+    addGearItem(
+      `<span class="popover-gh">${ghIcon} phuryn/grok-build-vscode</span><span class="popover-external">↗</span>`,
+      () => { vscode.postMessage({ type: "openUrl", url: "https://github.com/phuryn/grok-build-vscode" }); closePopovers(); },
+    );
   }
 
   // Config & debug: the former Config + Debug items behind one sub-view.
@@ -1099,6 +1130,16 @@
     if (!gearPopover.hidden) { closePopovers(); return; }
     closePopovers();
     renderGearMain();
+    positionPopover(gearPopover, gearBtn);
+    gearPopover.hidden = false;
+  }
+
+  // Open the gear popover straight to the Version & about panel (used by the
+  // welcome screen's "about" link). No-op if it's already showing About.
+  function openAboutPanel() {
+    if (!gearPopover.hidden && state.gearView === "about") return;
+    closePopovers();
+    renderAboutPanel(true);
     positionPopover(gearPopover, gearBtn);
     gearPopover.hidden = false;
   }
@@ -3251,6 +3292,10 @@
   };
   modeBtn.onclick = (e) => { e.stopPropagation(); openModePopover(); };
   gearBtn.onclick = (e) => { e.stopPropagation(); openGearPopover(); };
+
+  // Welcome screen's "about" link → open the gear popover's Version & about panel.
+  const welcomeAboutLink = $("welcome-about-link");
+  if (welcomeAboutLink) welcomeAboutLink.onclick = (e) => { e.preventDefault(); e.stopPropagation(); openAboutPanel(); };
   addBtn.onclick = (e) => { e.stopPropagation(); openAddPopover(); };
   historyBtn.onclick = (e) => { e.stopPropagation(); openHistoryPopover(); };
   modePopover.addEventListener("click", (e) => e.stopPropagation());

@@ -1,12 +1,14 @@
-# Grok Build for VS Code
+# Grok Build for VS Code (Unofficial)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![VS Code](https://img.shields.io/badge/VS%20Code-Extension-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com) [![Grok Build](https://img.shields.io/badge/xAI-Grok%20Build-000000)](https://x.ai) [![The Product Compass](https://img.shields.io/badge/The%20Product%20Compass-productcompass.pm-FF6B35)](https://www.productcompass.pm)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![VS Code](https://img.shields.io/badge/VS%20Code-Extension-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com) [![Unofficial](https://img.shields.io/badge/Unofficial-community%20%C2%B7%20MIT-FF6B35)](#) [![The Product Compass](https://img.shields.io/badge/The%20Product%20Compass-productcompass.pm-FF6B35)](https://www.productcompass.pm)
 
-A thin VS Code sidebar client for xAI's Grok Build CLI. It spawns `grok agent stdio` as a headless child and drives it over the [Agent Client Protocol (ACP)](https://agentclientprotocol.com) — session state, MCP servers, memory, and tool execution all stay inside that CLI process. **Not a terminal launcher and not a re-implementation.** Install the `grok` CLI first; the extension is a UI shell over it.
+> A VS Code UI for **xAI's Grok Build CLI** — not affiliated with or endorsed by xAI. *Grok*, *Grok Build*, and *xAI* are trademarks of xAI; this project uses those names only to describe what it's compatible with.
 
-Works with a SuperGrok subscription or an xAI API key. **Not affiliated with xAI.**
+Use Grok Build inside a VS Code panel, drop your open files in as `@`-context, keep **resumable chat history**, generate **images & video inline**, and dictate by **voice**. If you'd rather stay in your editor than a terminal, this brings Grok Build's agent into your sidebar.
 
-**Install free from the [VS Code Marketplace →](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn)**
+You install the `grok` CLI once and sign in — with a **SuperGrok subscription** or an **xAI API key** — and the extension is the GUI on top.
+
+**Install free from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn) or [Open VSX Registry](https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn)**
 
 ![Grok Build in the VS Code sidebar](docs/screenshots/v1.2.0.png)
 
@@ -14,9 +16,9 @@ Works with a SuperGrok subscription or an xAI API key. **Not affiliated with xAI
 
 ---
 
-## Why an extension, not the CLI?
+## Why use this?
 
-You get the things a terminal can't give you: VS Code's **native diff editor** on a proposed edit before you approve it, **permission cards** with *Allow always / once / Reject* instead of `[y/N]` prompts, your **active editor and selection as first-class `@file` context**, **session history** you can resume/rename/delete, **inline images and video** from `/imagine`, **voice dictation**, and **side-by-side** placement next to other AI tools. It's a UI shell — the trade-off is that it's useless without the `grok` CLI installed.
+If you live in your editor, this puts Grok Build right next to your code — a graphical workflow on top of the CLI: VS Code's **native diff editor** on a proposed edit before you approve it, **permission cards** (*Allow always / once / Reject*), your **active editor and selection as first-class `@file` context**, **session history** you can resume/rename/delete, **inline images and video** from `/imagine`, **voice dictation**, and **side-by-side** placement next to your other tools. The CLI does the heavy lifting; this is the GUI for when you'd rather not be in a terminal.
 
 A short tour of how the extension is wired (and the one place it's deliberately *not* thin — Plan Mode) lives in [docs/architecture.md](docs/architecture.md).
 
@@ -157,15 +159,6 @@ The green/red dot is an **unread** badge: it appears when a session finishes whi
 To keep a pile of background sessions from each pinning a live process, a session left untouched for an hour (or beyond ~8 live) is quietly shut down — never one that's working or waiting on you — and reloads from history on click, losing nothing.
 
 ![Session status dots in the history dropdown](docs/screenshots/v1.4.7_visual_status.jpg)
-
-</details>
-
-<details>
-<summary><strong>Instant feedback</strong> — a <em>Grokking…</em> indicator the moment you send, with no startup pause</summary>
-
-Every message you send shows an animated **Grokking…** placeholder immediately, so there's always feedback that Grok received it — it's replaced in place the instant the first thought, reply, or tool action streams in.
-
-There's also no longer a long silent pause before that first response. Plan Mode needs a little hidden setup per session; it now happens **quietly in the background** the moment a session opens — instead of in front of your first message — so it's almost always done before you hit send. If you *are* quick, your message still appears right away. *(What that setup is and why it's needed: [How it works](#how-it-works).)*
 
 </details>
 
