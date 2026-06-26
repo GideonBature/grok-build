@@ -63,25 +63,29 @@ export function parseGrokVersion(versionOutput: string): [number, number, number
 }
 
 /**
- * grok CLI 0.2.61–0.2.64 ships a Windows-only `agent stdio` regression: the
- * agent doesn't read its first stdin line until stdin hits EOF, so the
- * extension's ACP `initialize` never gets answered, the handshake times out, and
- * the process is torn down ("exited with code null"). Confirmed via a controlled
- * spawn (closing stdin → handshake succeeds; keeping it open as any real client
- * must → hang). The last working build is 0.2.60. See issue #22 and
- * `research/stdio-eof-regression.md`.
+ * grok CLI 0.2.61+ ships a Windows-only `agent stdio` regression: the agent doesn't
+ * read stdin lines until stdin hits EOF (which never comes for a live client), so an
+ * ACP startup request times out and the process is torn down ("exited with code
+ * null"). It *mutated* across builds: on **0.2.61–0.2.64** even `initialize` hangs;
+ * on **0.2.67** `initialize` is answered but the *next* request (`session/new`)
+ * hangs — so a session still can't start. 0.2.65–0.2.66 were never tested (treated as
+ * broken). Confirmed via controlled spawns (closing stdin → the read unblocks;
+ * keeping it open as any real client must → hang). The last fully-working build is
+ * 0.2.60. See issue #22 and `research/stdio-eof-regression.md`.
  *
- * Detect that range (Windows only) so the host can pin the CLI back to 0.2.60
- * until xAI ships a fix. The upper bound is deliberately closed at the last
- * known-broken build so a future *fixed* release isn't needlessly downgraded —
- * widen it (or drop this guard) once a fix lands and is verified. Pure.
+ * Detect the confirmed-broken range 0.2.61–0.2.67 (Windows only) so the host can pin
+ * the CLI back to 0.2.60 before spawning. The upper bound tracks the highest build
+ * confirmed broken; a *future* build above it is caught reactively
+ * (`shouldReactivelyDowngrade`) on the observed failure. Only once a build is
+ * confirmed fixed — **re-verified with the session/new probe, not just initialize** —
+ * raise `GROK_STDIO_DOWNGRADE_TARGET` to it and shrink this range. Pure.
  */
 export function isStdioBrokenGrokVersion(versionOutput: string, platform: NodeJS.Platform): boolean {
   if (platform !== "win32") return false;
   const v = parseGrokVersion(versionOutput);
   if (!v) return false;
   const [maj, min, pat] = v;
-  return maj === 0 && min === 2 && pat >= 61 && pat <= 64;
+  return maj === 0 && min === 2 && pat >= 61 && pat <= 67;
 }
 
 /** Compare two `[major, minor, patch]` tuples: <0, 0, or >0. Pure. */
@@ -133,11 +137,12 @@ export function grokUpdatePolicy(versionOutput: string, platform: NodeJS.Platfor
  * Should the host REACTIVELY downgrade the CLI after an *observed* `agent stdio`
  * init failure (handshake timeout / "exited code null")?
  *
- * The proactive `isStdioBrokenGrokVersion` only knows the closed, already-seen
- * broken range (0.2.61–0.2.64) — so a *future* still-broken build (0.2.65+) would
+ * The proactive `isStdioBrokenGrokVersion` only knows the closed, already-confirmed
+ * broken range (0.2.61–0.2.67) — so a *future* still-broken build (0.2.68+) would
  * slip past it and hang with no recovery. This check is the evidence-driven safety
- * net: it fires on the real failure, not a version guess, so it self-heals on any
- * build *above* the supported target without having to widen a hardcoded range.
+ * net: it fires on the real failure (whether the hang is at `initialize` or
+ * `session/new`), not a version guess, so it self-heals on any build *above* the
+ * supported target without having to widen a hardcoded range.
  *
  * Windows-only (the regression is). A build at/below 0.2.60 is never downgraded —
  * that's the loop guard: once the pin lands the version is exactly the target, so a

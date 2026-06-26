@@ -118,8 +118,11 @@ describe("parseGrokVersion", () => {
 });
 
 describe("isStdioBrokenGrokVersion (issue #22)", () => {
-  it("flags the broken 0.2.61–0.2.64 range on Windows", () => {
-    for (const p of ["0.2.61", "0.2.62", "0.2.63", "0.2.64"]) {
+  it("flags the broken 0.2.61–0.2.67 range on Windows", () => {
+    // 0.2.61–0.2.64 confirmed broken (initialize hangs); 0.2.67 confirmed broken
+    // (session/new hangs); 0.2.65–0.2.66 untested → treated as broken. All pinned
+    // back to the last fully-working 0.2.60.
+    for (const p of ["0.2.61", "0.2.62", "0.2.63", "0.2.64", "0.2.65", "0.2.66", "0.2.67"]) {
       expect(isStdioBrokenGrokVersion(`grok ${p} (x) [stable]`, "win32")).toBe(true);
     }
   });
@@ -131,7 +134,7 @@ describe("isStdioBrokenGrokVersion (issue #22)", () => {
 
   it("does not flag versions outside the broken range on Windows", () => {
     expect(isStdioBrokenGrokVersion("grok 0.2.59 (x) [stable]", "win32")).toBe(false);
-    expect(isStdioBrokenGrokVersion("grok 0.2.65 (x) [stable]", "win32")).toBe(false);
+    expect(isStdioBrokenGrokVersion("grok 0.2.68 (x) [stable]", "win32")).toBe(false);
     expect(isStdioBrokenGrokVersion("grok 0.3.0 (x) [stable]", "win32")).toBe(false);
     expect(isStdioBrokenGrokVersion("grok 0.1.211 (x) [stable]", "win32")).toBe(false);
   });
@@ -196,16 +199,17 @@ describe("grokUpdatePolicy (issue #22 — never upgrade onto an unsupported buil
 
 describe("shouldReactivelyDowngrade (issue #22 — evidence-driven recovery after an init failure)", () => {
   it("downgrades any Windows build ABOVE the supported target, incl. the known-broken range", () => {
-    for (const v of ["0.2.61", "0.2.64", "0.2.65", "0.3.0", "1.0.0"]) {
+    for (const v of ["0.2.61", "0.2.64", "0.2.67", "0.2.68", "0.3.0", "1.0.0"]) {
       expect(shouldReactivelyDowngrade(`grok ${v} (x) [stable]`, "win32")).toBe(true);
     }
   });
 
-  it("catches a FUTURE still-broken build (0.2.65+) the proactive range can't see", () => {
-    // The whole point: isStdioBrokenGrokVersion is a closed range and would miss 0.2.65,
-    // but a real init failure on it still recovers because this fires on evidence.
-    expect(isStdioBrokenGrokVersion("grok 0.2.65 (x) [stable]", "win32")).toBe(false);
-    expect(shouldReactivelyDowngrade("grok 0.2.65 (x) [stable]", "win32")).toBe(true);
+  it("catches a FUTURE still-broken build (0.2.68+) the proactive range can't see", () => {
+    // The whole point: isStdioBrokenGrokVersion is a closed range (0.2.61–0.2.67) and
+    // would miss a future 0.2.68, but a real startup failure on it still recovers
+    // because this fires on evidence, not a version guess.
+    expect(isStdioBrokenGrokVersion("grok 0.2.68 (x) [stable]", "win32")).toBe(false);
+    expect(shouldReactivelyDowngrade("grok 0.2.68 (x) [stable]", "win32")).toBe(true);
   });
 
   it("never downgrades at/below the target — the loop guard once the pin lands", () => {

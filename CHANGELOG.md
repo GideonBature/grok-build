@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.15 — 2026-06-26
+
+> Cover the #22 Windows session-start bug on newer Grok CLI builds (through 0.2.67) and when the hang moves to session start.
+
+### Fixes
+
+- **The Windows session-start workaround now covers Grok CLI 0.2.65–0.2.67 and a `session/new`-stage hang (#22).** Grok CLI 0.2.67 *looked* fixed — the ACP `initialize` handshake answers again — but the stdin-until-EOF regression only **moved**: the next request, `session/new`, now hangs instead (with stdin held open, as any live client must), so a real session still can't start. v1.4.14 only knew the 0.2.61–0.2.64 range and only recognized an `initialize`-stage hang, so anyone landing on 0.2.65–0.2.67 was left stuck. Now: the proactive pin covers the full confirmed-broken range **0.2.61–0.2.67** and pins the CLI back to the last fully-working **0.2.60** before starting; and the evidence-driven reactive recovery also fires on a **`session/new` / `session/load`** timeout, not just `initialize` — so a future still-broken build self-heals on the observed failure regardless of which startup request hangs. Verified with a controlled stdin-open probe (`initialize` then `session/new`) against real 0.2.67. ([src/cli-locator.ts](src/cli-locator.ts), [src/sidebar.ts](src/sidebar.ts))
+
+### Docs
+
+- Recorded that **0.2.67 does not fix #22** — the hang moved from `initialize` to `session/new` — with the reproduction probe in [research/stdio-eof-regression.md](research/stdio-eof-regression.md). Rewrote CLAUDE.md's status into a concise current-state project map (per-version history lives here in the changelog, not there).
+
 ## 1.4.14 — 2026-06-25
 
 > Smoother diff review on permission cards.

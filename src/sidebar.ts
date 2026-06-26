@@ -1516,15 +1516,18 @@ See design doc for the full state machine diagram.`;
       this.emit(session, { type: "setBusy", value: false });
       if (/auth|unauthor|forbidden|401|403|api[_\s-]?key|credential|sign.?in/i.test(msg)) {
         this.emit(session, { type: "onboarding", state: "auth-required" });
-      } else if (process.platform === "win32" && /timed out: initialize|exited \(code null\)/i.test(msg)) {
-        // The signature of the 0.2.61+ Windows stdio regression (issue #22): the
-        // handshake never completes. The proactive pin (maybePinBrokenCli) covers
-        // the *known* broken range (0.2.61–0.2.64); this is the evidence-driven
-        // safety net for a *newer* still-broken build (0.2.65+) that slips past it,
-        // or a build the user manually upgraded onto after a pin. We downgrade on
-        // the observed failure and retry the spawn once. After the pin the version
-        // is 0.2.60, so shouldReactivelyDowngrade() can't loop; a later manual
-        // re-upgrade pushes it back above the target and re-arms the recovery.
+      } else if (process.platform === "win32" && /timed out: (initialize|session\/(new|load))|exited \(code null\)/i.test(msg)) {
+        // The signature of the 0.2.61+ Windows stdio regression (issue #22): a
+        // startup request hangs because the agent won't read stdin until EOF. The
+        // hang moved across builds — `initialize` on 0.2.61–0.2.64, `session/new`
+        // on 0.2.67 — so we match either startup request, not just initialize. The
+        // proactive pin (maybePinBrokenCli) covers the *confirmed* broken range
+        // (0.2.61–0.2.67); this is the evidence-driven safety net for a *newer*
+        // still-broken build (0.2.68+) that slips past it, or a build the user
+        // manually upgraded onto after a pin. We downgrade on the observed failure
+        // and retry the spawn once. After the pin the version is 0.2.60, so
+        // shouldReactivelyDowngrade() can't loop; a later manual re-upgrade pushes it
+        // back above the target and re-arms the recovery.
         const version = await this.readGrokVersion(cliPath);
         if (!this.reactiveDowngradeInFlight && shouldReactivelyDowngrade(version, process.platform)) {
           this.reactiveDowngradeInFlight = true;
