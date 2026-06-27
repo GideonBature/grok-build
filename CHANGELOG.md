@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.17 — 2026-06-27
+
+> Pin Windows to the last working Grok CLI for *any* newer build — 0.2.61–0.2.69 all break session start (#22).
+
+### Changed
+
+- **The #22 Windows guard now pins *any* Grok CLI build above 0.2.60 back to 0.2.60 before starting**, instead of tracking a fixed broken range. 0.2.61–0.2.64 hang at `initialize`; 0.2.67 (stable) and 0.2.69 (alpha) answer `initialize` but hang at `session/new` — the bug has persisted on every build above 0.2.60, with no fix on either channel. Rather than widen a range per build (and eat a ~120s reactive hang on each new one), the extension treats everything newer than the supported 0.2.60 as broken on Windows. When xAI ships a build that passes the `session/new` check, raising the supported version one line adopts it; the reactive downgrade-on-failure stays as a backstop. ([src/cli-locator.ts](src/cli-locator.ts))
+
 ## 1.4.16 — 2026-06-26
 
 > Clearer listing and docs; lighter changelog.

@@ -1520,14 +1520,14 @@ See design doc for the full state machine diagram.`;
         // The signature of the 0.2.61+ Windows stdio regression (issue #22): a
         // startup request hangs because the agent won't read stdin until EOF. The
         // hang moved across builds — `initialize` on 0.2.61–0.2.64, `session/new`
-        // on 0.2.67 — so we match either startup request, not just initialize. The
-        // proactive pin (maybePinBrokenCli) covers the *confirmed* broken range
-        // (0.2.61–0.2.67); this is the evidence-driven safety net for a *newer*
-        // still-broken build (0.2.68+) that slips past it, or a build the user
-        // manually upgraded onto after a pin. We downgrade on the observed failure
-        // and retry the spawn once. After the pin the version is 0.2.60, so
-        // shouldReactivelyDowngrade() can't loop; a later manual re-upgrade pushes it
-        // back above the target and re-arms the recovery.
+        // on 0.2.67/0.2.69 — so we match either startup request, not just initialize.
+        // The proactive pin (maybePinBrokenCli) now pins any build above 0.2.60 before
+        // spawning; this reactive net is the backstop for when that pin couldn't run
+        // (version read failed, or the binary was locked so `grok update` couldn't
+        // rename it). We downgrade on the observed failure and retry the spawn once.
+        // After the pin the version is 0.2.60, so shouldReactivelyDowngrade() can't
+        // loop; a later manual re-upgrade pushes it back above the target and re-arms
+        // the recovery.
         const version = await this.readGrokVersion(cliPath);
         if (!this.reactiveDowngradeInFlight && shouldReactivelyDowngrade(version, process.platform)) {
           this.reactiveDowngradeInFlight = true;

@@ -66,26 +66,26 @@ export function parseGrokVersion(versionOutput: string): [number, number, number
  * grok CLI 0.2.61+ ships a Windows-only `agent stdio` regression: the agent doesn't
  * read stdin lines until stdin hits EOF (which never comes for a live client), so an
  * ACP startup request times out and the process is torn down ("exited with code
- * null"). It *mutated* across builds: on **0.2.61–0.2.64** even `initialize` hangs;
- * on **0.2.67** `initialize` is answered but the *next* request (`session/new`)
- * hangs — so a session still can't start. 0.2.65–0.2.66 were never tested (treated as
- * broken). Confirmed via controlled spawns (closing stdin → the read unblocks;
- * keeping it open as any real client must → hang). The last fully-working build is
- * 0.2.60. See issue #22 and `research/stdio-eof-regression.md`.
+ * null"). It *mutated* across builds — on **0.2.61–0.2.64** even `initialize` hangs;
+ * on **0.2.67** (stable) and **0.2.69** (alpha) `initialize` is answered but the
+ * *next* request (`session/new`) hangs — and it has **stayed broken on every build
+ * above 0.2.60 tested, on both channels, with no fix**. Confirmed via controlled
+ * spawns (closing stdin → the read unblocks; keeping it open as any real client must
+ * → hang). See issue #22 and `research/stdio-eof-regression.md`.
  *
- * Detect the confirmed-broken range 0.2.61–0.2.67 (Windows only) so the host can pin
- * the CLI back to 0.2.60 before spawning. The upper bound tracks the highest build
- * confirmed broken; a *future* build above it is caught reactively
- * (`shouldReactivelyDowngrade`) on the observed failure. Only once a build is
- * confirmed fixed — **re-verified with the session/new probe, not just initialize** —
- * raise `GROK_STDIO_DOWNGRADE_TARGET` to it and shrink this range. Pure.
+ * Because the breakage has been continuous (not a bounded range that's worth
+ * chasing), this treats **any Windows build above `GROK_STDIO_DOWNGRADE_TARGET`
+ * (0.2.60) as broken** and pins it back to 0.2.60 before spawning. That covers new
+ * broken builds with no code change and avoids the ~120s reactive hang per build. When
+ * xAI ships a build that passes the **session/new probe** (not just `initialize`),
+ * raise `GROK_STDIO_DOWNGRADE_TARGET` to it — builds at/below the new supported version
+ * stop being flagged, which adopts the fix. Pure.
  */
 export function isStdioBrokenGrokVersion(versionOutput: string, platform: NodeJS.Platform): boolean {
   if (platform !== "win32") return false;
   const v = parseGrokVersion(versionOutput);
   if (!v) return false;
-  const [maj, min, pat] = v;
-  return maj === 0 && min === 2 && pat >= 61 && pat <= 67;
+  return compareVersionTuple(v, parseGrokVersion(GROK_STDIO_DOWNGRADE_TARGET)!) > 0;
 }
 
 /** Compare two `[major, minor, patch]` tuples: <0, 0, or >0. Pure. */
@@ -137,12 +137,12 @@ export function grokUpdatePolicy(versionOutput: string, platform: NodeJS.Platfor
  * Should the host REACTIVELY downgrade the CLI after an *observed* `agent stdio`
  * init failure (handshake timeout / "exited code null")?
  *
- * The proactive `isStdioBrokenGrokVersion` only knows the closed, already-confirmed
- * broken range (0.2.61–0.2.67) — so a *future* still-broken build (0.2.68+) would
- * slip past it and hang with no recovery. This check is the evidence-driven safety
- * net: it fires on the real failure (whether the hang is at `initialize` or
- * `session/new`), not a version guess, so it self-heals on any build *above* the
- * supported target without having to widen a hardcoded range.
+ * The proactive `isStdioBrokenGrokVersion` now pins any build above the supported
+ * target before spawning, so in normal operation this rarely fires. It's the
+ * evidence-driven backstop for the cases the proactive pin can't cover — the version
+ * read failed, or the pin (`grok update`) couldn't run (e.g. a locked binary) — so a
+ * session that still spawns on a broken build and hangs gets recovered. It fires on
+ * the real failure (`initialize` *or* `session/new`), not a version guess.
  *
  * Windows-only (the regression is). A build at/below 0.2.60 is never downgraded —
  * that's the loop guard: once the pin lands the version is exactly the target, so a

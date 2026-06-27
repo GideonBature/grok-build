@@ -2,7 +2,7 @@
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build for VS Code (Unofficial)",
   "description": "Unofficial VS Code client for xAI's Grok Build CLI — review edits in a diff before approving, @-mention files, resumable history, inline image/video, and voice. Requires the Grok Build CLI plus a SuperGrok subscription or xAI API key. MIT, open-source. Not affiliated with or endorsed by xAI.",
-  "version": "1.4.16",
+  "version": "1.4.17",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
