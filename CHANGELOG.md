@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.19 — 2026-06-28
+
+> Card-UX polish from a live image-generation session: permission cards read in order and minimize once answered, restored plans start collapsed, and background-task notices stop polluting the chat.
+
+### Fixed
+
+- **Grok's reply after a permission prompt now renders *below* the card, not above it.** A permission request arrives mid-turn, so streaming kept appending to the agent bubble already on screen *above* the new card — only a fresh user turn pushed the conversation past it. The card now finalizes the in-flight turn first (the `commitAgentTurn()` the plan card already used), so everything after the answer lands beneath it, in order. ([media/chat.js](media/chat.js))
+- **Answered permission cards no longer reappear *active* when you re-focus a backgrounded session.** Re-focusing replays the session's post buffer, but the answer (a webview-only collapse) was never in it, so an already-decided card came back fully expanded with live buttons. The host now records a `permissionResolved` marker in the buffer on answer, so the replayed card comes back collapsed. ([src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js))
+
+### Added
+
+- **Answered permission cards now persist across a full reload.** The CLI doesn't replay `session/request_permission` on `session/load`, so resumed sessions used to lose every approval you'd made. The extension now persists each answered card (title + allowed/rejected + the gated tool-call id) and replays it as a **collapsed** card **anchored to the exact tool it gated** — by tool-call id, or by the tool's title when no id was captured (the card title *is* the tool's title) — so it lands where you answered it, mid-turn, not at the turn boundary (with a user-message-position fallback if the tool never replays). ([src/sidebar.ts](src/sidebar.ts), [src/session.ts](src/session.ts), [src/sessions.ts](src/sessions.ts), [src/acp-dispatch.ts](src/acp-dispatch.ts), [media/chat.js](media/chat.js))
+
+### Changed
+
+- **Answered permission cards collapse to one muted line.** Picking an option used to leave the full card with greyed-out buttons and a "you chose: …" note in the transcript. It now minimizes to a single non-interactive line — a colored `Allowed` / `Rejected` verb plus what it applied to — matching the resolved question/plan cards, with the "Grokking…" indicator underneath until grok resumes. ([media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- **Restored plan cards start collapsed.** Resuming a long session no longer dumps full plan text — each restored plan shows its title, verdict, and a `Show plan` / `Hide plan` toggle (the body stays in the DOM, just hidden). ([media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- **Background-task completion is a one-shot toast, not a chat bubble.** When grok backgrounds a long command (e.g. a nested `grok -p …` image/video job), the CLI emits a structured `task_completed` update *and* feeds the result back as a `user_message_chunk` wrapped in `<system-reminder>…`. The extension now routes `task_backgrounded` / `task_completed` to their own events, pops a single `showInformationMessage` (with **Show Logs**) on completion — skipped during session replay — and drops the replayed `<system-reminder>` turn so it never surfaces as a fake user bubble on restore. ([src/acp-dispatch.ts](src/acp-dispatch.ts), [src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js))
+
+### Tests — 545
+
+- New: `task_backgrounded` / `task_completed` routing, `summarizeBackgroundCommand`, and `permissionOutcomeFor` ([test/acp-dispatch.test.ts](test/acp-dispatch.test.ts)); permission-card ordering + collapse + re-focus survival + restored-collapsed-card interleaving, restored-plan collapse toggle, and `<system-reminder>` suppression on restore, driving the real `media/chat.js` ([test/card-collapse-tasks.dom.test.ts](test/card-collapse-tasks.dom.test.ts)).
+
 ## 1.4.18 — 2026-06-28
 
 > Grok CLI fixed the #22 Windows session-start regression (0.2.71, now on stable as 0.2.72) — adopt it and re-enable updates.

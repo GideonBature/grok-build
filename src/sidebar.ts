@@ -10,7 +10,7 @@ import { selectReapable, computeDot, Dot } from "./session-pool";
 import { resolveVoiceKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice";
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
-import { MediaRef, isIncompatibleAgentError } from "./acp-dispatch";
+import { MediaRef, isIncompatibleAgentError, permissionOutcomeFor, summarizeBackgroundCommand } from "./acp-dispatch";
 import {
   locateGrokCli,
   extensionWasUpgraded,
@@ -663,6 +663,28 @@ See design doc for the full state machine diagram.`;
       [sid]: { ...cur, lastPlanVerdict: verdict, plans },
     };
     void this.context.globalState.update(SESSION_META_KEY, next);
+  }
+
+  /** Persist an answered permission card (title + allowed/rejected + position) so
+   *  a resumed session can replay it collapsed — the CLI doesn't replay
+   *  request_permission on session/load. */
+  private persistPermissionAnswer(session: Session, requestId: number | string, optionId: string): void {
+    const pending = session.pendingPermissions.get(requestId);
+    session.pendingPermissions.delete(requestId);
+    if (!pending) return;
+    const sid = session.activeSessionId ?? session.client?.sessionId;
+    if (!sid) return;
+    const outcome = permissionOutcomeFor(pending.options, optionId);
+    const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
+    const cur = overrides[sid] ?? {};
+    const permissions = [
+      ...(cur.permissions ?? []),
+      { title: pending.title, outcome, toolCallId: pending.toolCallId, afterUserMessage: session.userMessageCount },
+    ];
+    void this.context.globalState.update(SESSION_META_KEY, {
+      ...overrides,
+      [sid]: { ...cur, permissions },
+    });
   }
 
   /** Run and clear any deferred post-turn action set by `handleExitPlan`. */
@@ -1327,6 +1349,29 @@ See design doc for the full state machine diagram.`;
       if (gen !== session.gen) return;
       void this.postGeneratedMedia(m, session, gen);
     });
+    client.on("taskBackgrounded", (u: any) => {
+      if (gen !== session.gen) return;
+      const cmd = typeof u?.command === "string" ? u.command : "";
+      this.output.appendLine(`[task] backgrounded: ${cmd.slice(0, 200)}`);
+    });
+    client.on("taskCompleted", (u: any) => {
+      if (gen !== session.gen) return;
+      // A long-running background command finished. Surface it as a one-shot
+      // toast, NOT a chat bubble — the CLI separately feeds a <system-reminder>
+      // back to grok (the webview drops that on replay). Skipped during replay so
+      // a resumed session doesn't re-announce tasks that finished long ago.
+      if (session.replaying) return;
+      const snap = u?.task_snapshot ?? u ?? {};
+      const cmd = typeof snap.command === "string" ? snap.command : "";
+      const exit = snap.exit_code ?? snap.exitCode ?? snap.status?.exitCode;
+      const ok = exit == null || exit === 0;
+      const label = summarizeBackgroundCommand(cmd);
+      const text = `Grok background task ${ok ? "completed" : `exited (code ${exit})`}${label ? `: ${label}` : ""}`;
+      this.output.appendLine(`[task] ${text}`);
+      void vscode.window.showInformationMessage(text, "Show Logs").then((choice) => {
+        if (choice === "Show Logs") this.output.show();
+      });
+    });
     client.on("toolCall", (u) => {
       if (gen !== session.gen) return;
       session.inUserMessage = false;
@@ -1381,6 +1426,12 @@ See design doc for the full state machine diagram.`;
                     req.options.find((o) => o.kind === "allow_once");
         if (opt) { client.respondPermission(req.id, opt.optionId); return; }
       }
+      // Remember it so the answer can be persisted for replay on resume.
+      session.pendingPermissions.set(req.id, {
+        title: req.toolCall?.title || `permission: ${req.toolCall?.kind || "tool"}`,
+        toolCallId: req.toolCall?.toolCallId,
+        options: (req.options ?? []).map((o) => ({ optionId: o.optionId, kind: o.kind })),
+      });
       this.emit(session, { type: "permissionRequest", req });
       this.setStatus(session, "needs-you");
     });
@@ -1420,6 +1471,12 @@ See design doc for the full state machine diagram.`;
         // them inline with user messages as they replay (instead of dumping all
         // cards at the bottom).
         const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
+        // Answered permission cards (collapsed) for this session, interleaved
+        // inline during replay like the plan cards below.
+        const savedPerms = overrides[resumeId]?.permissions ?? [];
+        if (savedPerms.length > 0) {
+          this.emit(session, { type: "permissionHistoryQueue", permissions: savedPerms });
+        }
         const saved = overrides[resumeId]?.plans ?? [];
         if (saved.length > 0) {
           this.emit(session, { type: "planHistoryQueue", plans: await this.withPlanReviewPaths(saved, resumeId) });
@@ -1623,6 +1680,13 @@ See design doc for the full state machine diagram.`;
         break;
       case "permissionAnswer":
         this.focused.client?.respondPermission(msg.requestId, msg.optionId);
+        // Record the resolution in the session buffer so re-focusing this session
+        // replays the card collapsed instead of active (the live collapse is a
+        // webview-only DOM mutation that the buffer never captured).
+        this.emit(this.focused, { type: "permissionResolved", requestId: msg.requestId, optionId: msg.optionId });
+        // Persist it (title + outcome) so a cold reload replays a collapsed card —
+        // the CLI doesn't replay request_permission on session/load.
+        this.persistPermissionAnswer(this.focused, msg.requestId, msg.optionId);
         this.closeDiffForRequest(msg.requestId); // tidy up the auto-opened diff (#21)
         this.setStatus(this.focused, "working"); // turn resumes after the answer
         break;

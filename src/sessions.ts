@@ -25,6 +25,12 @@ export interface SessionMetaOverride {
    *  the resume view can render each card right after that message instead of dumping all the
    *  plan cards at the bottom of the restored conversation. */
   plans?: { text: string; verdict: "approved" | "rejected" | "abandoned"; afterUserMessage?: number }[];
+  /** Every permission card the user answered in this session, in order. The CLI
+   *  doesn't replay `session/request_permission` on `session/load` (it's a server
+   *  request, not a session update), so we persist the title + outcome here and
+   *  replay each as a collapsed card. `afterUserMessage` positions it inline, like
+   *  `plans`. */
+  permissions?: { title: string; outcome: "allowed" | "rejected"; toolCallId?: string; afterUserMessage?: number }[];
   /** Dashboard "unread" badge: a turn finished while this session wasn't focused and
    *  hasn't been opened since. Drives the green/red dot; cleared on open. Persisted
    *  (not tied to the live process) so the badge survives reaping and a reload. */

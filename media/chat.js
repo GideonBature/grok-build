@@ -109,6 +109,10 @@
     // in, and dump anything left (legacy plans w/o position, or plans after the
     // last replayed user msg) at the end of replay.
     planHistoryQueue: [],
+    // Answered permission cards from a resumed session, drained inline like plans
+    // (each { title, outcome, afterUserMessage? }). The CLI doesn't replay the
+    // request, so the host persists + re-queues these.
+    permissionHistoryQueue: [],
     userMsgCount: 0,
     // Element rendered below a resolved plan card while the host is waiting on
     // grok's response to the verdict (or its comment). Visible only between
@@ -164,6 +168,12 @@
   // session replay to detect and hide the primer + grok's ack from the
   // restored conversation.
   const PRIMER_PATTERN = /^\s*\[grok-build-vscode primer v\d+\]/;
+
+  // The CLI feeds background-task notices (and similar plumbing) back to the
+  // agent as a user_message_chunk wrapped in <system-reminder>…</system-reminder>.
+  // It's agent-facing context the user never typed — keep it out of the chat
+  // on replay (the host surfaces task completion as a one-shot notification).
+  const SYSTEM_REMINDER_PATTERN = /^\s*<system-reminder>/;
 
   // The host prepends a plan-verdict protocol marker ([Plan approved|rejected|
   // cancelled]) to the wire-level prompt so grok can recognize the verdict. It's
@@ -1455,6 +1465,7 @@
     state.activeToolGroupEl = null;
     state.replaying = false;
     state.planHistoryQueue = [];
+    state.permissionHistoryQueue = [];
     state.userMsgCount = 0;
     state.suppressReplayTurn = false;
     state.skipUserBubble = false;
@@ -2020,11 +2031,20 @@
         state.suppressReplayTurn = true;
         return;
       }
+      // Background-task notices the CLI injects as <system-reminder> user turns
+      // are agent plumbing, not user content — never bubble them on restore.
+      // Grok's reply to them still renders. (Live ones are already dropped by
+      // the !replaying guard above; this covers the replayed copy.)
+      if (SYSTEM_REMINDER_PATTERN.test(text)) {
+        state.skipUserBubble = true;
+        return;
+      }
       state.suppressReplayTurn = false;
       // Drain saved plan cards that should appear BEFORE this user message — the
       // verdict message that resolved a plan is the boundary, so drain first even
       // for a marker-only verdict that itself renders no bubble.
       drainPlanHistory(state.userMsgCount);
+      drainPermissionHistory(state.userMsgCount);
       if (state.replaying) {
         const mk = stripPlanMarker(text);
         if (mk.matched) {
@@ -2070,6 +2090,54 @@
     if (!state.planHistoryQueue.length) return;
     for (const p of state.planHistoryQueue) addPlanHistoryCard(p.text, p.verdict, p.planPath, p.planName);
     state.planHistoryQueue = [];
+  }
+
+  // Render a restored permission card collapsed (no buttons) — the answer is
+  // history. Reuses the live collapsed representation.
+  function addRestoredPermissionCard(title, outcome) {
+    clearWelcome();
+    const el = document.createElement("div");
+    collapsePermissionCard(el, outcome === "rejected" ? "reject_once" : "allow_once", title);
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  // Render a restored permission card at the exact tool it gated, the moment that
+  // tool replays — so it lands where it was answered, not at the turn boundary.
+  // Matches by toolCallId when we have it, else by exact title (the card title IS
+  // the tool's title, so an older entry saved without an id still anchors). The
+  // real title arrives on the tool_call_update (the tool_call is often a generic
+  // "Shell"/"Grep"), so this is called from both. Closing the open tool group
+  // first mirrors the live commitAgentTurn.
+  function renderRestoredPermissionForTool(toolCallId, title) {
+    if (!state.permissionHistoryQueue.length) return;
+    const matches = state.permissionHistoryQueue.filter((p) =>
+      (toolCallId && p.toolCallId === toolCallId) ||
+      (!p.toolCallId && title && p.title === title));
+    if (!matches.length) return;
+    const matched = new Set(matches);
+    state.permissionHistoryQueue = state.permissionHistoryQueue.filter((p) => !matched.has(p));
+    closeToolGroup();
+    for (const p of matches) addRestoredPermissionCard(p.title, p.outcome);
+  }
+
+  // Fallback for entries WITHOUT a toolCallId (legacy/unmatchable): position by
+  // user-message boundary like plans. Tool-anchored entries are handled inline.
+  function drainPermissionHistory(cutoff) {
+    if (!state.permissionHistoryQueue.length) return;
+    state.permissionHistoryQueue = state.permissionHistoryQueue.filter((p) => {
+      if (!p.toolCallId && typeof p.afterUserMessage === "number" && p.afterUserMessage <= cutoff) {
+        addRestoredPermissionCard(p.title, p.outcome);
+        return false;
+      }
+      return true;
+    });
+  }
+
+  function flushPermissionHistory() {
+    if (!state.permissionHistoryQueue.length) return;
+    for (const p of state.permissionHistoryQueue) addRestoredPermissionCard(p.title, p.outcome);
+    state.permissionHistoryQueue = [];
   }
 
   function showPlanProcessing() {
@@ -2139,14 +2207,52 @@
 
   // ---------- permission card ----------
 
+  // Verb shown on a resolved (minimized) permission card.
+  const PERM_VERB = {
+    allow_always: "Allowed",
+    allow_once: "Allowed",
+    reject_once: "Rejected",
+  };
+
+  // Replace a permission card with a single muted, non-interactive line once the
+  // user answers — same minimized treatment as a resolved question/plan card.
+  // `kind` drives the colour; `title` says what it applied to.
+  function collapsePermissionCard(el, kind, title) {
+    el.className = "card permission resolved perm-resolved";
+    el.innerHTML = "";
+    const line = document.createElement("div");
+    line.className = "perm-resolved-line perm-" + (kind === "reject_once" ? "rejected" : "allowed");
+    const verb = document.createElement("span");
+    verb.className = "perm-resolved-verb";
+    verb.textContent = PERM_VERB[kind] || "Answered";
+    line.appendChild(verb);
+    const what = document.createElement("span");
+    what.className = "perm-resolved-what";
+    what.textContent = title || "";
+    line.appendChild(what);
+    el.appendChild(line);
+  }
+
   function addPermissionCard(req) {
     clearWelcome();
     hideGrokking();
+    // Mirror the plan card: finalize any in-flight agent/thinking/tool turn so
+    // grok's continuation after the answer renders BELOW this card, not appended
+    // to the bubble that was streaming above it.
+    commitAgentTurn();
+    const cardTitle = req.toolCall?.title || `permission: ${req.toolCall?.kind || "tool"}`;
     const el = document.createElement("div");
     el.className = "card permission";
+    // Tag the card so a buffered `permissionResolved` (replayed when this session
+    // is re-focused) can find it and collapse it — the live collapse is a DOM-only
+    // mutation that isn't in the session buffer, so without this an already-answered
+    // card replays as active on every re-focus.
+    el.dataset.permReqId = String(req.id);
+    el._permOptions = req.options || [];
+    el._permTitle = cardTitle;
     const title = document.createElement("div");
     title.className = "card-title";
-    title.textContent = req.toolCall?.title || `permission: ${req.toolCall?.kind || "tool"}`;
+    title.textContent = cardTitle;
     el.appendChild(title);
 
     const diff = state.pendingDiffByToolCallId.get(req.toolCall?.toolCallId);
@@ -2190,12 +2296,10 @@
           requestId: req.id,
           optionId: opt.optionId,
         });
-        el.classList.add("resolved");
-        for (const b of actions.querySelectorAll("button")) b.disabled = true;
-        const chosen = document.createElement("div");
-        chosen.className = "card-subtitle";
-        chosen.textContent = `you chose: ${opt.name}`;
-        el.appendChild(chosen);
+        // Collapse to one muted line and show the working indicator — grok
+        // resumes the turn after the answer.
+        collapsePermissionCard(el, opt.kind, cardTitle);
+        showGrokking();
       };
       actions.appendChild(btn);
     }
@@ -2584,10 +2688,22 @@
 
     addPlanFileLink(el, planPath, planName);
 
+    // Restored plans are reference material, not something to act on — keep them
+    // collapsed by default so a resumed session isn't a wall of old plan text.
+    // The body stays in the DOM (just hidden) behind a toggle.
     const body = document.createElement("div");
     body.className = "plan-body";
+    body.hidden = true;
     body.innerHTML = text ? renderMarkdown(text) : "(empty plan)";
     renderMermaidIn(body);
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "plan-toggle";
+    const setToggle = () => { toggle.textContent = body.hidden ? "Show plan" : "Hide plan"; };
+    setToggle();
+    toggle.onclick = () => { body.hidden = !body.hidden; setToggle(); };
+    el.appendChild(toggle);
     el.appendChild(body);
 
     if (verdictLabel) {
@@ -2993,6 +3109,7 @@
         // Live send (or immediate verdict-feedback bubble): render and bump the
         // counter so any plan history queued for this position drains first.
         drainPlanHistory(state.userMsgCount);
+        drainPermissionHistory(state.userMsgCount);
         state.userMsgCount += 1;
         addMessage("user", msg.text, msg.chips || []);
         forceScrollToBottom(); // jump back to the bottom on the user's own send (#16)
@@ -3032,7 +3149,14 @@
           // or was resolved after the final user message of the session. Render
           // it now at the bottom so we don't silently drop those plans.
           flushPlanHistory();
+          flushPermissionHistory();
         }
+        break;
+      case "permissionHistoryQueue":
+        // Answered permission cards from the resumed session, interleaved inline
+        // exactly like the plan queue. Does NOT reset userMsgCount — planHistoryQueue
+        // owns that (and is posted right after this on resume).
+        state.permissionHistoryQueue = (msg.permissions || []).slice();
         break;
       case "planHistoryQueue":
         // Sent by the host right before replay starts. Drives inline placement
@@ -3065,9 +3189,17 @@
           break;
         }
         addToToolGroup(msg.call);
+        // Resume: if this tool was permission-gated, drop the restored (collapsed)
+        // card right here — exactly where it was answered — instead of at the turn
+        // boundary.
+        renderRestoredPermissionForTool(msg.call.toolCallId, msg.call.title);
         break;
       case "toolCallUpdate": {
         if (state.suppressReplayTurn) break;
+        // Resume: anchor a restored permission card here — the update carries the
+        // tool's real title (the tool_call is often a generic "Shell"/"Grep"), so
+        // a card saved without a toolCallId still matches by title.
+        renderRestoredPermissionForTool(msg.call?.toolCallId, msg.call?.title);
         // Resume: fill the answer into the matching restored card when it lands.
         const restoredEl = state.restoredCardsByToolCallId.get(msg.call?.toolCallId);
         if (restoredEl) {
@@ -3111,6 +3243,18 @@
       case "permissionRequest":
         addPermissionCard(msg.req);
         break;
+      case "permissionResolved": {
+        // Replayed (on re-focus) right after the buffered permissionRequest, or
+        // live right after the user answers — collapse the matching card if it's
+        // still active. Idempotent: a live click already collapsed it.
+        const cards = [...messagesEl.querySelectorAll(".card.permission")];
+        const el = cards.find((c) => c.dataset.permReqId === String(msg.requestId) && !c.classList.contains("perm-resolved"));
+        if (el) {
+          const opt = (el._permOptions || []).find((o) => o.optionId === msg.optionId);
+          collapsePermissionCard(el, opt && opt.kind, el._permTitle);
+        }
+        break;
+      }
       case "exitPlanRequest":
         addPlanCard(msg.req);
         break;

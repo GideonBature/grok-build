@@ -1176,6 +1176,42 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
 .card-actions button:disabled { opacity: 0.4; cursor: default; }
 .card.resolved { opacity: 0.5; border-left-color: var(--vscode-editorWidget-border); }
 
+/* ---- resolved (minimized) permission card ---- */
+.card.permission.perm-resolved {
+  opacity: 1; /* the muted line carries the de-emphasis, not the whole card */
+  padding: 6px 10px;
+  border-left-color: var(--vscode-editorWidget-border);
+}
+.perm-resolved-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  min-width: 0;
+}
+.perm-resolved-verb { font-weight: 600; flex: none; }
+.perm-resolved-line.perm-allowed .perm-resolved-verb { color: var(--vscode-charts-green, #4ec9b0); }
+.perm-resolved-line.perm-rejected .perm-resolved-verb { color: var(--vscode-charts-orange, #ce9178); }
+.perm-resolved-what {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- restored plan card: show/hide toggle ---- */
+.card .plan-toggle {
+  align-self: flex-start;
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+.card .plan-toggle:hover { text-decoration: underline; }
+
 /* ---------- question card (ask_user_question) ---------- */
 .card.question { border-left-color: var(--vscode-charts-purple, #b180d7); }
 /* "Grok is asking" / "You answered" reads as a small label so the question

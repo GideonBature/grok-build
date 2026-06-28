@@ -422,6 +422,8 @@ export class AcpClient extends EventEmitter {
       this.emit("commandsUpdate", r.commands);
       return;
     }
+    if (r.event === "taskBackgrounded") { this.emit("taskBackgrounded", r.payload); return; }
+    if (r.event === "taskCompleted") { this.emit("taskCompleted", r.payload); return; }
     if (r.event === "messageChunk") this.emit("messageChunk", r.text);
     else if (r.event === "userMessageChunk") this.emit("userMessageChunk", r.text);
     else if (r.event === "thoughtChunk") this.emit("thoughtChunk", r.text);

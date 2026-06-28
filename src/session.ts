@@ -76,6 +76,11 @@ export class Session {
    */
   suppressPlanReject = false;
 
+  /** Live permission requests awaiting an answer, by request id. Set when the
+   *  card is shown, read when the user answers so we can persist the resolved
+   *  card (title + outcome) for replay on a resumed session, then deleted. */
+  pendingPermissions = new Map<number | string, { title: string; toolCallId?: string; options: { optionId: string; kind: string }[] }>();
+
   /** Most recent plan text seen for this session (exit_plan_mode fallback). */
   lastPlanText = "";
 

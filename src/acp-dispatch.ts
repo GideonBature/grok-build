@@ -55,6 +55,8 @@ export type UpdateRoute =
   | { event: "plan"; payload: any }
   | { event: "modeChanged"; modeId: string }
   | { event: "commandsUpdate"; commands: any[] }
+  | { event: "taskBackgrounded"; payload: any }
+  | { event: "taskCompleted"; payload: any }
   | { event: "update"; payload: any };
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
@@ -232,6 +234,10 @@ export function routeSessionUpdate(u: any): UpdateRoute | null {
       return { event: "modeChanged", modeId: u.currentModeId };
     case "available_commands_update":
       return { event: "commandsUpdate", commands: u.availableCommands ?? [] };
+    case "task_backgrounded":
+      return { event: "taskBackgrounded", payload: u };
+    case "task_completed":
+      return { event: "taskCompleted", payload: u };
     default:
       return { event: "update", payload: u };
   }
@@ -308,6 +314,25 @@ export function makeAckResponse(id: number | string, result: any = {}) {
 
 export function makeRequest(id: number, method: string, params: any) {
   return { jsonrpc: "2.0", id, method, params };
+}
+
+/** Classify a permission answer as allowed vs rejected from the chosen option's
+ *  kind (`allow_once`/`allow_always` → allowed, `reject_*`/`deny_*` → rejected).
+ *  Used to persist the answer so a resumed session can replay the collapsed card. */
+export function permissionOutcomeFor(
+  options: { optionId: string; kind: string }[] | undefined,
+  optionId: string,
+): "allowed" | "rejected" {
+  const opt = (options ?? []).find((o) => o.optionId === optionId);
+  return opt && /reject|deny/i.test(opt.kind) ? "rejected" : "allowed";
+}
+
+/** Compress a (possibly huge) background shell command into a one-line label for
+ *  a notification — collapse whitespace and clip to a readable length. */
+export function summarizeBackgroundCommand(cmd: string, max = 80): string {
+  const flat = (cmd || "").replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  return flat.slice(0, max - 1).trimEnd() + "…";
 }
 
 /**

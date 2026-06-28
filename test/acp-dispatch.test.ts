@@ -13,7 +13,9 @@ import {
   makeQuestionResponse,
   makeRequest,
   parseAcpLine,
+  permissionOutcomeFor,
   routeSessionUpdate,
+  summarizeBackgroundCommand,
 } from "../src/acp-dispatch";
 
 describe("parseAcpLine", () => {
@@ -141,6 +143,58 @@ describe("routeSessionUpdate", () => {
   it("handles missing content.text gracefully", () => {
     const r = routeSessionUpdate({ sessionUpdate: "agent_message_chunk" });
     expect(r).toEqual({ event: "messageChunk", text: "" });
+  });
+
+  it("routes task_backgrounded / task_completed to their own events (not generic update)", () => {
+    const bg = routeSessionUpdate({ sessionUpdate: "task_backgrounded", task_id: "t", command: "grok -p ..." });
+    expect(bg?.event).toBe("taskBackgrounded");
+    if (bg?.event === "taskBackgrounded") expect(bg.payload.command).toBe("grok -p ...");
+
+    const done = routeSessionUpdate({ sessionUpdate: "task_completed", task_snapshot: { command: "x", exit_code: 0 } });
+    expect(done?.event).toBe("taskCompleted");
+    if (done?.event === "taskCompleted") expect(done.payload.task_snapshot.exit_code).toBe(0);
+  });
+});
+
+describe("permissionOutcomeFor", () => {
+  const opts = [
+    { optionId: "a1", kind: "allow_once" },
+    { optionId: "a2", kind: "allow_always" },
+    { optionId: "r1", kind: "reject_once" },
+    { optionId: "d1", kind: "deny" },
+  ];
+  it("maps allow_* to allowed", () => {
+    expect(permissionOutcomeFor(opts, "a1")).toBe("allowed");
+    expect(permissionOutcomeFor(opts, "a2")).toBe("allowed");
+  });
+  it("maps reject_*/deny to rejected", () => {
+    expect(permissionOutcomeFor(opts, "r1")).toBe("rejected");
+    expect(permissionOutcomeFor(opts, "d1")).toBe("rejected");
+  });
+  it("defaults to allowed for an unknown option / empty list", () => {
+    expect(permissionOutcomeFor(opts, "nope")).toBe("allowed");
+    expect(permissionOutcomeFor(undefined, "x")).toBe("allowed");
+  });
+});
+
+describe("summarizeBackgroundCommand", () => {
+  it("returns short commands unchanged", () => {
+    expect(summarizeBackgroundCommand("ls -la")).toBe("ls -la");
+  });
+
+  it("collapses whitespace/newlines to a single line", () => {
+    expect(summarizeBackgroundCommand("grok  -p\n  \"do thing\"")).toBe('grok -p "do thing"');
+  });
+
+  it("clips long commands with an ellipsis", () => {
+    const out = summarizeBackgroundCommand("grok -p " + "x".repeat(200), 40);
+    expect(out.length).toBe(40);
+    expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("handles empty/undefined input", () => {
+    expect(summarizeBackgroundCommand("")).toBe("");
+    expect(summarizeBackgroundCommand(undefined as unknown as string)).toBe("");
   });
 });
 
