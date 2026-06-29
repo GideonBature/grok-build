@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.22 — 2026-06-29
+
+> Single-home the sidebar so it can be moved in Cursor, and stop forcing whole-file reads on attachments.
+
+### Fixed
+
+- **The view can be relocated again (Cursor).** We declared the `grokSidebar` container in **two** places at once (`activitybar` + `secondarySideBar`); `secondarySideBar` only exists in VS Code ≥ 1.106, so on older bases (incl. current Cursor) the stray declaration is parsed-but-unsupported — it pinned the view to the left and could even shift *other* extensions' views. The container is now single-homed to `activitybar`; relocate it with right-click the **Grok** title → **Move To → Secondary Side Bar** (it persists). ([package.json](package.json))
+- **Attached files are handed to grok as paths, not `@`-reads.** A file chip used to become `@relPath`, grok's "read this whole file" convention — which slurped large files (a big CSV/log) into context and *failed outright on binaries*: an attached image or video triggered `read_file` → *"Cannot read binary file"* (grok has no vision). Chips now render as a plain **"Attached file(s):"** path list, so grok decides how to consume each — grep/range-read big text, pass image/video paths to its media tools, read small files in full. Selected-range chips still inline the exact lines you picked. ([src/prompt-builder.ts](src/prompt-builder.ts))
+- **Corrected the subscription requirement.** The sign-in screen claimed *SuperGrok **Heavy*** was required for Grok Build — wrong on two counts: it's **any SuperGrok *or* X Premium+** subscription, and naming the $300/mo Heavy tier scared off eligible users. Fixed in the onboarding, README, and Marketplace description (and clarified that Grok's free tier doesn't include the CLI agent). ([media/chat.js](media/chat.js), [README.md](README.md), [package.json](package.json))
+
+### Changed
+
+- **Renamed the "Voice input" feature to "Voice control"** across the UI and docs. ([README.md](README.md), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js))
+- **Welcome byline reads "(The Product Compass)"** again (dropped the "Newsletter" suffix). ([src/sidebar.ts](src/sidebar.ts))
+
 ## 1.4.21 — 2026-06-29
 
 > Documentation-only patch: the README screenshots now match the current (v1.4.20) UI.

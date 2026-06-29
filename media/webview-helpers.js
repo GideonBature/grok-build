@@ -41,7 +41,7 @@
     return (m && m.name) || modelId;
   }
 
-  // Mic button state machine for voice input:
+  // Mic button state machine for voice control:
   //   idle → (start) → connecting → [host ready] → listening → (stop) → transcribing → (transcript) → idle
   // "connecting" covers the ~½–1s while the stream (ws + ffmpeg) spins up, so the
   // blue "listening" waves only appear once it's actually ready to capture — the

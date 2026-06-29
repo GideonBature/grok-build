@@ -7,7 +7,7 @@ import { bootWebview, dispatch, click, Posted } from "./webview-harness";
 const $ = (doc: Document, id: string) => doc.getElementById(id) as HTMLElement;
 const types = (posted: Posted[]) => posted.map((p) => p.type);
 
-describe("voice input mic button", () => {
+describe("voice control mic button", () => {
   it("starts idle showing the mic icon", () => {
     const { doc } = bootWebview();
     const mic = $(doc, "mic-btn");
@@ -152,7 +152,7 @@ describe("voice input mic button", () => {
   });
 });
 
-describe("voice input: live streaming transcription", () => {
+describe("voice control: live streaming transcription", () => {
   it("shows live partials in the composer as they stream in", () => {
     const { window, doc } = bootWebview();
     const mic = $(doc, "mic-btn");
@@ -201,7 +201,7 @@ describe("voice input: live streaming transcription", () => {
   });
 });
 
-describe("voice input: continuous listening + queue (hands-free)", () => {
+describe("voice control: continuous listening + queue (hands-free)", () => {
   it("voiceSubmit sends immediately when idle, clears composer, and KEEPS listening", () => {
     const { window, posted, doc } = bootWebview();
     const mic = $(doc, "mic-btn");
@@ -269,7 +269,7 @@ describe("voice input: continuous listening + queue (hands-free)", () => {
   });
 });
 
-describe("voice input: 'grok send' command highlight", () => {
+describe("voice control: 'grok send' command highlight", () => {
   it("wraps a trailing send phrase in an accent pill on the backdrop", () => {
     const { window, doc } = bootWebview();
     const mic = $(doc, "mic-btn");
@@ -307,7 +307,7 @@ describe("voice input: 'grok send' command highlight", () => {
   });
 });
 
-describe("voice input: API-key setup hint", () => {
+describe("voice control: API-key setup hint", () => {
   it("shows a 'needs setup' hint when the host reports no key", () => {
     const { window, doc } = bootWebview();
     const mic = $(doc, "mic-btn");

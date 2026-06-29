@@ -2162,7 +2162,7 @@ See design doc for the full state machine diagram.`;
   /** Show actionable guidance for setting up the voice API key. */
   private async promptVoiceKeySetup(): Promise<void> {
     const pick = await vscode.window.showErrorMessage(
-      "Voice input needs an xAI API key (Speech-to-Text) — a separate console.x.ai developer key, not your Grok CLI login. Set grok.voiceApiKey, or GROK_VOICE_API_KEY / XAI_API_KEY in your workspace .env.",
+      "Voice control needs an xAI API key (Speech-to-Text) — a separate console.x.ai developer key, not your Grok CLI login. Set grok.voiceApiKey, or GROK_VOICE_API_KEY / XAI_API_KEY in your workspace .env.",
       "Open Settings",
       "Get a Key",
     );
@@ -2376,7 +2376,7 @@ See design doc for the full state machine diagram.`;
       const sendPhrase = vscode.workspace.getConfiguration("grok").get<string>("voiceSendPhrase", DEFAULT_SEND_PHRASE);
       const { text, send } = parseVoiceCommand(raw, sendPhrase);
       if (!text && !send) {
-        vscode.window.showInformationMessage("Voice input: nothing was transcribed (silence?).");
+        vscode.window.showInformationMessage("Voice control: nothing was transcribed (silence?).");
         this.post({ type: "voiceError" });
         return;
       }
@@ -3026,7 +3026,7 @@ See design doc for the full state machine diagram.`;
     <div class="welcome" id="welcome">
       <span class="welcome-mark" role="img" aria-label="Grok" style="--welcome-mark:url('${resourceUri("grok-icon.svg")}')"></span>
       <h2>Grok Build (Community)</h2>
-      <p class="welcome-byline muted">by Paweł Huryn (<a href="https://www.productcompass.pm/" class="muted-link">The Product Compass Newsletter</a>)</p>
+      <p class="welcome-byline muted">by Paweł Huryn (<a href="https://www.productcompass.pm/" class="muted-link">The Product Compass</a>)</p>
       <p id="welcome-version" class="muted loading-dots">Starting</p>
       <div id="welcome-onboarding"></div>
     </div>
@@ -3037,7 +3037,7 @@ See design doc for the full state machine diagram.`;
       <div id="input-highlight" class="input-highlight" aria-hidden="true"></div>
       <textarea id="input" placeholder="Ask Grok..." rows="3"></textarea>
     </div>
-    <button id="mic-btn" class="mic-btn" title="Voice input"></button>
+    <button id="mic-btn" class="mic-btn" title="Voice control"></button>
     <div class="composer-toolbar">
       <div class="toolbar-left">
         <button id="add-btn" class="toolbar-btn" title="Add context"></button>

@@ -19,9 +19,16 @@ describe("buildPrompt", () => {
     expect(buildPrompt("hello", [], deps)).toBe("hello");
   });
 
-  it("renders a file-only chip as @ref", () => {
+  it("renders a file-only chip as a plain attached path (no @, no forced read)", () => {
     const out = buildPrompt("explain this", [makeImplicitChip("/a.ts", "src/a.ts")], deps);
-    expect(out).toBe("@src/a.ts\n\nexplain this");
+    expect(out).toBe("Attached file: src/a.ts\n\nexplain this");
+  });
+
+  it("lists multiple file-only chips under 'Attached files:'", () => {
+    const a = makeImplicitChip("/a.ts", "src/a.ts");
+    const b = makeImplicitChip("/pic.png", "/Users/me/Downloads/pic.png");
+    const out = buildPrompt("animate it", [a, b], deps);
+    expect(out).toBe("Attached files:\n- src/a.ts\n- /Users/me/Downloads/pic.png\n\nanimate it");
   });
 
   it("renders a selection chip as fenced code", () => {
@@ -35,20 +42,20 @@ describe("buildPrompt", () => {
   it("skips hidden chips", () => {
     const visible = makeImplicitChip("/a.ts", "a.ts");
     const hidden = { ...makeImplicitChip("/b.ts", "b.ts"), hidden: true };
-    expect(buildPrompt("q", [visible, hidden], deps)).toBe("@a.ts\n\nq");
+    expect(buildPrompt("q", [visible, hidden], deps)).toBe("Attached file: a.ts\n\nq");
   });
 
-  it("falls back to @ref when readFile throws", () => {
+  it("falls back to a plain attached path when readFile throws", () => {
     const chip = makeExplicitChip("/missing.ts", "missing.ts", 1, 5);
-    expect(buildPrompt("q", [chip], deps)).toBe("@missing.ts\n\nq");
+    expect(buildPrompt("q", [chip], deps)).toBe("Attached file: missing.ts\n\nq");
   });
 
-  it("combines multiple chips", () => {
+  it("combines a file attachment with a selection snippet", () => {
     const a = makeImplicitChip("/a.ts", "a.ts");
     const b = makeExplicitChip("/b.ts", "b.ts", 1, 2);
     const out = buildPrompt("compare", [a, b], deps);
     expect(out).toBe(
-      "@a.ts\n\n`b.ts` (lines 1-2):\n```ts\nX\nY\n```\n\ncompare",
+      "Attached file: a.ts\n\n`b.ts` (lines 1-2):\n```ts\nX\nY\n```\n\ncompare",
     );
   });
 

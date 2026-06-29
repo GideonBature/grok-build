@@ -1,4 +1,4 @@
-// Impure side of voice input: spawn ffmpeg to capture the mic in the extension
+// Impure side of voice control: spawn ffmpeg to capture the mic in the extension
 // host (webviews can't reach the microphone), and POST the clip to xAI's
 // Speech-to-Text API. The deterministic bits (arg building, device parsing,
 // response/error handling) live in voice.ts and are unit-tested; this file is

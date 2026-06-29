@@ -1,8 +1,8 @@
 {
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build for VS Code (Community)",
-  "description": "VS Code client for xAI's Grok Build CLI — review edits in a diff before approving, @-mention files, resumable history, inline image/video, and voice. Requires the Grok Build CLI plus a SuperGrok subscription or xAI API key. MIT, open-source. Not affiliated with or endorsed by xAI.",
-  "version": "1.4.21",
+  "description": "VS Code client for xAI's Grok Build CLI — review edits in a diff before approving, @-mention files, resumable history, inline image/video, and voice. Requires the Grok Build CLI plus a SuperGrok or X Premium+ subscription (or an xAI API key). MIT, open-source. Not affiliated with or endorsed by xAI.",
+  "version": "1.4.22",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
@@ -44,13 +44,6 @@
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        {
-          "id": "grokSidebar",
-          "title": "Grok",
-          "icon": "resources/grok-icon.svg"
-        }
-      ],
-      "secondarySideBar": [
         {
           "id": "grokSidebar",
           "title": "Grok",
@@ -204,17 +197,17 @@
         "grok.voiceApiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "xAI API key for voice input (Speech-to-Text via `api.x.ai/v1/stt`). This is a **separate** developer key from [console.x.ai](https://console.x.ai) — it is billed pay-as-you-go and is unrelated to the Grok CLI login. Leave empty to fall back to `GROK_VOICE_API_KEY` or `XAI_API_KEY` in your workspace `.env`."
+          "markdownDescription": "xAI API key for voice control (Speech-to-Text via `api.x.ai/v1/stt`). This is a **separate** developer key from [console.x.ai](https://console.x.ai) — it is billed pay-as-you-go and is unrelated to the Grok CLI login. Leave empty to fall back to `GROK_VOICE_API_KEY` or `XAI_API_KEY` in your workspace `.env`."
         },
         "grok.ffmpegPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the ffmpeg binary used to record the microphone for voice input. Empty = use 'ffmpeg' from PATH. Install ffmpeg from https://ffmpeg.org if voice input reports it as missing."
+          "description": "Path to the ffmpeg binary used to record the microphone for voice control. Empty = use 'ffmpeg' from PATH. Install ffmpeg from https://ffmpeg.org if voice control reports it as missing."
         },
         "grok.voiceInputDevice": {
           "type": "string",
           "default": "",
-          "description": "Microphone device for voice input. Empty = system default (on Windows, the first DirectShow audio device is auto-detected). Set this to a specific device name (Windows/dshow) or index (macOS/avfoundation) to override."
+          "description": "Microphone device for voice control. Empty = system default (on Windows, the first DirectShow audio device is auto-detected). Set this to a specific device name (Windows/dshow) or index (macOS/avfoundation) to override."
         },
         "grok.voiceSendPhrase": {
           "type": "string",

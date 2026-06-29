@@ -6,7 +6,7 @@
 
 Use Grok Build inside a VS Code panel, drop your open files in as `@`-context, keep **resumable chat history**, generate **images & video inline**, and dictate by **voice**. If you'd rather stay in your editor than a terminal, this brings Grok Build's agent into your sidebar.
 
-You install the `grok` CLI once and sign in — with a **SuperGrok subscription** or an **xAI API key** — and the extension is the GUI on top.
+You install the `grok` CLI once and sign in — with a **SuperGrok or X Premium+ subscription**, or an **xAI API key** — and the extension is the GUI on top.
 
 **Install free from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn) or [Open VSX Registry](https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn)**
 
@@ -28,8 +28,8 @@ A short tour of how the extension is wired (and the one place it's deliberately 
 
 - **VS Code** 1.90+ (or a compatible editor — Cursor, Windsurf, VSCodium).
 - **The Grok Build CLI** (`grok`) on macOS, Linux, or Windows. The CLI ships a native Windows build, so the extension runs natively on all three — no WSL required (WSL2 + Remote-WSL still works if you prefer it).
-- **A login:** either a SuperGrok subscription (`grok /login`) or an xAI API key. With a subscription you get **Grok Build**; with an API key you also get the **grok-4.x** models and **grok-imagine**.
-- **For voice input only** (optional): [`ffmpeg`](https://ffmpeg.org) on `PATH`, and a *separate* xAI API key for Speech-to-Text (pay-as-you-go, ~$0.10/hr — your CLI login does **not** cover it). See **Voice input** under [Features & capabilities](#features--capabilities).
+- **A login:** either a **SuperGrok or X Premium+** subscription (`grok /login`) or an xAI API key. Either subscription unlocks **Grok Build**; with an API key you also get the **grok-4.x** models and **grok-imagine**. (Grok's free tier does **not** include the CLI agent.)
+- **For voice control only** (optional): [`ffmpeg`](https://ffmpeg.org) on `PATH`, and a *separate* xAI API key for Speech-to-Text (pay-as-you-go, ~$0.10/hr — your CLI login does **not** cover it). See **Voice control** under [Features & capabilities](#features--capabilities).
 
 ---
 
@@ -122,7 +122,7 @@ Type `/imagine <prompt>` (or `/imagine-video <prompt>`) and the result renders *
 </details>
 
 <details>
-<summary><strong>Voice input</strong> — hands-free dictation with live transcription</summary>
+<summary><strong>Voice control</strong> — hands-free dictation with live transcription</summary>
 
 The **microphone button** in the composer dictates speech, transcribed by [xAI's Speech-to-Text API](https://docs.x.ai/developers/model-capabilities/audio/voice). Click it, wait for the blue listening waves, and speak — words appear live as you talk. Say **"grok send"** to submit hands-free and keep listening for the next message (dictate while Grok responds; those messages queue and flush when it finishes). Click the mic to stop and keep any in-progress text.
 
@@ -130,7 +130,7 @@ The two-word send phrase is deliberate (it won't fire on a message that merely e
 
 > **Cost:** Speech-to-Text is a *separate*, pay-as-you-go xAI product — **$0.10/hr** batch, **$0.20/hr** streaming, billed by audio duration. In practice ~500 words ≈ ½–1¢; a heavy 10,000-word day ≈ 10¢. It needs its own [console.x.ai](https://console.x.ai) key (`grok.voiceApiKey` / `GROK_VOICE_API_KEY` / `XAI_API_KEY`) — a SuperGrok subscription grants no API credit. Why it bypasses the CLI, and how the cost was measured end-to-end: [research/voice-input.md](research/voice-input.md).
 
-![Voice input with live transcription in the composer](docs/screenshots/voice_mode.png)
+![Voice control with live transcription in the composer](docs/screenshots/voice_mode.png)
 
 </details>
 

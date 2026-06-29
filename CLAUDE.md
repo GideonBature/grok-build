@@ -23,7 +23,7 @@ This file is the project map: it describes the **current** architecture, not a p
 | `src/cli-locator.ts` | Locate `grok` binary (configured path → `~/.grok/bin/grok` → PATH); cross-platform |
 | `src/terminal-manager.ts` | Headless shell children for the agent's `terminal/*` ACP calls; cross-platform via `shell:true` |
 | `src/chips.ts` | File-chip CRUD (pure) |
-| `src/prompt-builder.ts` | Chip → prompt-string with `@path` refs and fenced code blocks |
+| `src/prompt-builder.ts` | Chip → prompt-string: whole-file chips become a plain **"Attached file(s):"** path list (NOT `@`-reads — those force a full read and fail on binaries; grok decides how to consume each path), selected-range chips become fenced code blocks |
 | `src/slash-filter.ts` | Slash-command autocomplete filter |
 | `src/plan-gate.ts` | Plan-mode policy (pure) — workspace-write containment, read-only command allowlist, permission/plan-file classification |
 | `src/plan-restore.ts` | Plan persist + restore decision (pure) — appendPlanEntry + decideRestoreState |
@@ -66,7 +66,7 @@ The history popover loads sessions **one page at a time** (`SESSION_PAGE_SIZE = 
 
 ```bash
 npm install
-npm test         # 582 tests, ~1.5s, vitest — all grok-free (incl. happy-dom DOM tests + fake-CLI ACP integration tests)
+npm test         # 583 tests, ~1.5s, vitest — all grok-free (incl. happy-dom DOM tests + fake-CLI ACP integration tests)
 npm run test:perf # opt-in session-history perf simulation (NOT in npm test/CI; see § History pagination)
 npm run package  # → grok-vscode-phuryn-<version>.vsix (clears older *.vsix first)
 ```
@@ -75,7 +75,7 @@ npm run package  # → grok-vscode-phuryn-<version>.vsix (clears older *.vsix fi
 
 There are **three** kinds of tests, and it matters which is which:
 
-1. **`npm test` — grok-free unit/DOM/integration suite (582 tests).** Pure logic, happy-dom tests that drive the real `media/chat.js`, a real-`/bin/sh` TerminalManager smoke, and a fake-CLI ACP integration suite (`test/fixtures/fake-grok-acp.cjs`). **Never spawns the real `grok` binary.** Runs in <2s with no network, no login, no subscription. This is the floor — every change keeps it green. (A separate opt-in `npm run test:perf` runs the session-history perf simulation — `test/*.perf.ts` via `vitest.perf.config.ts`, matched only by that config so it stays out of `npm test`/CI; see § History pagination.)
+1. **`npm test` — grok-free unit/DOM/integration suite (583 tests).** Pure logic, happy-dom tests that drive the real `media/chat.js`, a real-`/bin/sh` TerminalManager smoke, and a fake-CLI ACP integration suite (`test/fixtures/fake-grok-acp.cjs`). **Never spawns the real `grok` binary.** Runs in <2s with no network, no login, no subscription. This is the floor — every change keeps it green. (A separate opt-in `npm run test:perf` runs the session-history perf simulation — `test/*.perf.ts` via `vitest.perf.config.ts`, matched only by that config so it stays out of `npm test`/CI; see § History pagination.)
 2. **CI — the *same* suite.** `.github/workflows/ci.yml` runs `npm ci && npm test && npm run package` on a clean Ubuntu box. **CI ≡ layer 1, verbatim** — there is no separate CI-only set. CI has no `grok` binary, no auth, no SuperGrok subscription, so it *cannot* run anything that touches the real CLI. That's the whole reason layer 1 is grok-free.
 3. **`npm run test:live` — on-demand pre-release suite against REAL grok (`scripts/live-tests.cjs`).** Spawns the actual `grok agent stdio` and exercises the surfaces layers 1–2 can't: the real ACP handshake, a prompt round-trip, session restore, plan-mode enforcement, and the v1.4.x generative features (image gen, video gen; the subagent path is exercised opportunistically and SKIPs when grok doesn't delegate — it's deferred/research-only). It **reuses the real compiled modules** (`out/acp-dispatch.js`, `out/plan-gate.js`, `media/webview-helpers.js`) — it feeds genuine wire output through the same `isMediaGenToolCall`/`extractGeneratedMediaPaths`/`isSubagentToolCall`/`shouldBlockWrite` the extension uses, not a re-implementation. **Always run it before every release-to-`main` — it's a non-negotiable, standing part of the release gate; run it without asking** (it needs a logged-in grok + subscription and burns credits, so it must never be in `npm test` or CI, but it is mandatory before any tag/release). Flags: `--quick` (skip the slow generative tests), `--only=`, `--skip=`, `GROK_BIN=…`. A SKIP (no subscription, grok chose not to delegate, etc.) does not fail the gate — only a FAIL does. Real-grok **diagnostic probes** (`research/*.cjs`) remain manual one-offs for capturing wire shapes; the live suite is the repeatable gate.
 
@@ -119,7 +119,7 @@ See `README.md § Install` for the full per-platform matrix.
 - Generated media is served via `asWebviewUri` (streamed from disk) when it lives under the grok-home `localResourceRoot`; files outside that fall back to a base64 `data:` URI
 - No worktree UI
 - Diff editor is preview-only; the write happens via `fs/write_text_file` after approval
-- View defaults to left activity bar; user must drag to secondary side bar manually if desired
+- View is single-homed to the left activity bar (`viewsContainers.activitybar` only — declaring `secondarySideBar` too is invalid below VS Code 1.106 and misplaces the view, esp. in Cursor); user relocates to the secondary side bar via *Move To → Secondary Side Bar*, which persists
 
 ## Cross-platform notes
 
@@ -158,7 +158,7 @@ What the script encodes, step by step:
    - `package.json` itself — description, `engines`, `categories`, `contributes`.
 
    Keep `CHANGELOG.md` entries **terse** (1–3 bullets per release under Added/Changed/Fixed; deep detail belongs in commits / `research/`, not the changelog); releases before the current minor live in `docs/CHANGELOG-ARCHIVE.md` (linked from the foot of `CHANGELOG.md`).
-2. `npm test` (582-test floor, all green) + `tsc -p . --noEmit` clean, **and `npm run test:live` against real grok — mandatory, run without asking** (the `release.*` scripts don't run it, so run it by hand before invoking them).
+2. `npm test` (583-test floor, all green) + `tsc -p . --noEmit` clean, **and `npm run test:live` against real grok — mandatory, run without asking** (the `release.*` scripts don't run it, so run it by hand before invoking them).
 3. Commit + push to `main` (direct-to-main, no feature branches).
 4. **Annotated git tag** `vX.Y.Z` at the release commit → `git tag -a vX.Y.Z -m "Release vX.Y.Z"` → `git push origin vX.Y.Z`.
 5. **GitHub Release** for that tag → `gh release create vX.Y.Z --title "Release vX.Y.Z" --notes-file <notes> <vsix>` (notes = the new changelog section(s); include any earlier version that was bumped but never released). **Always attach the built `grok-vscode-phuryn-X.Y.Z.vsix` as a release asset** so the exact installable build is downloadable from the release.
@@ -174,7 +174,7 @@ Don't skip the tag/release (or the vsix asset) on a release push. (A pure mid-de
 - Commits explain the *why*, not the *what*
 - Don't introduce abstractions speculatively
 - Don't add comments that explain what well-named code already says
-- 582 tests is the floor — every PR should keep that green. All tests are grok-free (no binary spawn); grok-dependent probes live in `research/*.cjs` and are run manually, never by `npm test` or CI
+- 583 tests is the floor — every PR should keep that green. All tests are grok-free (no binary spawn); grok-dependent probes live in `research/*.cjs` and are run manually, never by `npm test` or CI
 - **Rebuilding clears older `.vsix` first** — `npm run package` (and the install/release scripts) delete stale `grok-vscode-phuryn-*.vsix` before building, so only the current version is on disk. After any doc or code change, rebuild + reinstall so the installed extension's bundled docs are current. **Package last:** the vsix bundles `CLAUDE.md`/`README.md`/`docs/` as files, so finish *all* doc + code edits **before** the final `npm run package` + reinstall — otherwise the installed build ships a stale-docs snapshot. If you rebuild mid-task and then touch docs again, rebuild again so the order is always edit-everything → package → reinstall.
 - **Version bumps are user-initiated.** Iterate at the current version (rebuild the same vsix and reinstall locally) until the user says to bump and publish. Don't bump `package.json` on your own.
 - **Sign GitHub comments.** Every GitHub issue/PR comment posted on the user's behalf ends with a signature on its own final line (italic). Pick by whether Paweł actually reviewed the text before it was posted: if he reviewed it, use `_Written with an agent, reviewed by Paweł_`; if the agent posted it without his review, use `_Written by Pawel's agent_`. Only claim review when it actually happened.

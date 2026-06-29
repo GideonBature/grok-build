@@ -1505,7 +1505,7 @@
       onb.innerHTML =
         `<div class="onb">` +
           `<p class="onb-heading">Sign in to continue</p>` +
-          `<p class="onb-desc"><strong>SuperGrok Heavy subscription</strong> &mdash; required for the <em>Grok Build</em> entitlement.</p>` +
+          `<p class="onb-desc"><strong>SuperGrok or X Premium+ subscription</strong> &mdash; either unlocks the <em>Grok Build</em> entitlement.</p>` +
           `<button class="onb-action" type="button" data-act="runLogin">Open terminal &amp; run <code>grok /login</code></button>` +
           `<p class="onb-or">or</p>` +
           `<p class="onb-desc"><strong>API key</strong> &mdash; pay per token; unlocks additional models (grok-4.20, grok-4.3, grok-imagine). Get a key at <a href="https://console.x.ai" class="onb-link">console.x.ai</a>, then add to your shell or a workspace <code>.env</code>:</p>` +
@@ -2968,7 +2968,7 @@
     slashPopover.hidden = true;
   }
 
-  // ---------- voice input ----------
+  // ---------- voice control ----------
 
   // The mic button records in the extension host (webviews can't reach the mic)
   // and transcribes via xAI Speech-to-Text. We optimistically flip to
@@ -2994,8 +2994,8 @@
     } else {
       micBtn.innerHTML = ICON.mic;
       micBtn.title = state.voiceConfigured
-        ? "Voice input"
-        : "Voice input — click to set up (needs an xAI API key)";
+        ? "Voice control"
+        : "Voice control — click to set up (needs an xAI API key)";
       micBtn.disabled = false;
     }
     // "needs setup" dot only when idle and no key is configured.
