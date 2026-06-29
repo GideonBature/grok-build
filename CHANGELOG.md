@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.21 — 2026-06-29
+
+> Documentation-only patch: the README screenshots now match the current (v1.4.20) UI.
+
+### Changed
+
+- **README screenshots refreshed.** New hero image, plus shots for **session history**, the redesigned **tool-call rows**, and the **permission diff-preview** card; the tool-calls description now matches the categorized/icon design. The old v1.2.0 sidebar screenshot is removed. ([README.md](README.md), [docs/screenshots/](docs/screenshots/))
+
 ## 1.4.20 — 2026-06-28
 
 > A chat-readability overhaul plus housekeeping: tool and thinking rows get Codex-style category icons and a muted-until-hover look, failed tools finally show *why*, each narration sits above the tools it describes, and the empty "primer" sessions stop cluttering history (#24). Also renamed **Unofficial → Community**.

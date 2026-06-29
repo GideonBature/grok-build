@@ -10,7 +10,7 @@ You install the `grok` CLI once and sign in — with a **SuperGrok subscription*
 
 **Install free from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn) or [Open VSX Registry](https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn)**
 
-![Grok Build in the VS Code sidebar](docs/screenshots/v1.2.0.png)
+![Grok Build in the VS Code sidebar](docs/screenshots/v1.4.20.png)
 
 ![Generated image rendered inline from /imagine](docs/screenshots/imagine.png)
 
@@ -99,6 +99,8 @@ _Click any feature to expand._
 
 When Grok proposes an edit, the card shows a `path — N → M lines` summary and an **open diff →** button that opens VS Code's native diff editor against the proposed content. Approve with *Allow once / always*, or *Reject*. The file is written only **after** you approve — no surprise changes to your files.
 
+![Permission card with a native VS Code diff preview before approval](docs/screenshots/permission_diff.png)
+
 </details>
 
 <details>
@@ -167,12 +169,16 @@ To keep a pile of background sessions from each pinning a live process, a sessio
 
 The clock icon lists the sessions the CLI saved for this project, most recent first. Click a row to resume — Grok replays the conversation, with inline images, plans, and reasoning intact. Hover to rename (pencil) or delete (trash); names default to the first message. The list loads the **most recent 100** and pulls in older ones as you **scroll**, and the **search box** filters by name across your whole history — so it stays fast even with thousands of sessions. **Clear all history** at the bottom of the dropdown removes every session for this project in one step (after a confirm), keeping the one you're currently in. Renames are stored by the extension and never touch Grok's own files.
 
+![Session history dropdown — resume, rename, delete, search, or clear past sessions](docs/screenshots/session_history.png)
+
 </details>
 
 <details>
 <summary><strong>Tool calls</strong> — every read, edit & command, inline</summary>
 
-Every action Grok takes appears in chat — a single flat row ("Read sidebar.ts lines 1–120", "Edit package.json", "Run npm test"), or a collapsed group ("Read, Edit +2") that expands on click.
+Every action Grok takes appears in chat, each row led by a **category icon** — a single line ("Read sidebar.ts", "Edit package.json", "Run npm test"), or a batch summarized by what it actually did ("Explored 5 items", "Edited 2 files", "Ran 3 commands") that expands to the full list on click. Rows stay muted until you hover, and a tool that **fails** turns red with the reason inline.
+
+![Tool calls grouped and summarized by category, with icons](docs/screenshots/tool_calls.png)
 
 </details>
 
