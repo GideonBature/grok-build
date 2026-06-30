@@ -821,6 +821,21 @@
         continue;
       }
 
+      // Fenced code block alone on a line → emit as its own block. Without this it
+      // falls through to the paragraph path and gets wrapped in <br><br> before and
+      // after; on top of the .code-block div's own 8px margin that reads as TWO
+      // blank lines around a code block (the model only sent one). Mirrors the
+      // table/math branches above so spacing is just the div's margin.
+      const bm = line.trim().match(/^\x00B(\d+)\x00$/);
+      if (bm) {
+        closeFrom(0);
+        out += `\x00B${bm[1]}\x00`;
+        lastWasBlock = true;
+        lastPara = false;
+        pendingBreak = false;
+        continue;
+      }
+
       const hm = line.match(/^(#{1,3}) (.+)$/);
       if (hm) {
         closeFrom(0);

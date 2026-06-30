@@ -1051,6 +1051,21 @@ describe("Mermaid diagram rendering", () => {
     // the raw text shows through until the closing fence arrives
     expect(el.textContent).toContain("flowchart TD");
   });
+
+  // A single markdown blank line around a fenced block must NOT render as a doubled
+  // gap. The block placeholder used to fall through to the paragraph path and get
+  // wrapped in <br><br> before/after; on top of the .code-block div's own margin
+  // that read as ~2 blank lines (the model only sent one). It's now emitted as its
+  // own block, like tables/math, so no <br> hugs the code block.
+  it("does not glue <br> around a code block (single blank line, not doubled)", () => {
+    const el = renderAgent("Folders:\n\n```\ndocs/\n```\n\nNo other dirs.");
+    const block = el.querySelector(".code-block") as HTMLElement;
+    expect(block).not.toBeNull();
+    expect(block.previousElementSibling?.tagName).not.toBe("BR");
+    expect(block.nextElementSibling?.tagName).not.toBe("BR");
+    expect(el.textContent).toContain("Folders:");
+    expect(el.textContent).toContain("No other dirs.");
+  });
 });
 
 // Nested code blocks (issue #20): an outer fence of 4+ backticks must survive so
