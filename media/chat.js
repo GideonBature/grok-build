@@ -1868,7 +1868,16 @@
     const el = state.activeToolGroupEl;
     const calls = el._calls || [];
 
-    if (calls.length === 1) {
+    // A lone edit/write is NOT flattened to a `.tool-flat` (icon + label only). That
+    // flat row has no chevron and no body, so the diff preview ("N → M lines" +
+    // "open diff →") — which attachDiffPreviewToToolItem appends to the tool-item in
+    // the body — would be discarded and the message couldn't be expanded to review
+    // the change (#30). On restore it's worse: renderRestoredPermissionForTool closes
+    // the group BEFORE the toolCallUpdate carrying the diff arrives, so the preview
+    // would attach to an orphaned node. Keeping the group (chevron + body) makes a
+    // single edit behave exactly like a multi-tool batch, which already works, in both
+    // the live and replay orderings.
+    if (calls.length === 1 && categorize(calls[0]) !== "edit") {
       const flat = document.createElement("div");
       flat.className = "tool-flat";
       flat.innerHTML = toolIconFor(calls); // icon first

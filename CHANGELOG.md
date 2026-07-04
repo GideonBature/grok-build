@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.29 — 2026-07-05
+
+### Fixed
+
+- **A permission request that's only an edit is now reviewable, and its diff survives a VS Code restart.** A standalone edit collapsed to a bare one-line row with no way to open the diff — while a read+edit batch stayed expandable — and on restore the diff was lost entirely. A lone edit now keeps the same collapsible tool group (chevron, "N → M lines", "open diff →") as a multi-tool batch, in both the live and resumed orderings. ([media/chat.js](media/chat.js)) (#30)
+
 ## 1.4.28 — 2026-07-01
 
 ### Fixed
