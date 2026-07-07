@@ -28,6 +28,10 @@ import { resolveGrokHome } from "./sessions";
 
 export type EffortLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
+export type PromptContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; mimeType: string; data: string };
+
 export interface AcpClientOptions {
   cliPath: string;
   cwd: string;
@@ -297,11 +301,15 @@ export class AcpClient extends EventEmitter {
     // current_mode_update will arrive as a session/update
   }
 
-  async prompt(text: string): Promise<PromptResultMeta> {
+  async prompt(textOrBlocks: string | PromptContentBlock[]): Promise<PromptResultMeta> {
     if (!this.sessionId) throw new Error("no session");
+    const prompt: PromptContentBlock[] =
+      typeof textOrBlocks === "string"
+        ? [{ type: "text", text: textOrBlocks }]
+        : textOrBlocks;
     const result = await this.request("session/prompt", {
       sessionId: this.sessionId,
-      prompt: [{ type: "text", text }],
+      prompt,
     });
     const meta = extractPromptMeta(result);
     this.lastMeta = meta;

@@ -34,12 +34,18 @@ import { TerminalManager } from "./terminal-manager";
 import {
   FileChip,
   clearImplicitChips,
+  extFromMime,
+  isImagePath,
   makeExplicitChip,
+  makeImageChip,
   makeImplicitChip,
+  mimeFromPath,
+  nextImageIndex,
   removeChip,
   toggleChip,
 } from "./chips";
-import { buildPrompt } from "./prompt-builder";
+import { buildPromptWithImages } from "./prompt-builder";
+import type { PromptContentBlock } from "./acp";
 import { parseFileRef, shouldReadFileInline } from "./file-ref";
 import { pickRejectOption, shouldRejectPermission } from "./plan-gate";
 import { appendPlanEntry, decideRestoreState } from "./plan-restore";
@@ -97,6 +103,7 @@ type WebviewMsg =
   | { type: "deleteSession"; id: string; name?: string }
   | { type: "clearAllSessions" }
   | { type: "pickFile" }
+  | { type: "pasteImage"; mimeType: string; data: string }
   | { type: "voiceStart" }
   | { type: "voiceStop" };
 
@@ -1744,6 +1751,9 @@ See design doc for the full state machine diagram.`;
       case "dropFile":
         this.addDroppedFile(msg.path, msg.shift);
         break;
+      case "pasteImage":
+        this.addPastedImage(msg.data, msg.mimeType);
+        break;
       case "permissionAnswer":
         this.focused.client?.respondPermission(msg.requestId, msg.optionId);
         // Record the resolution in the session buffer so re-focusing this session
@@ -2639,8 +2649,48 @@ See design doc for the full state machine diagram.`;
     return vscode.Uri.joinPath(dir, `${stem}-${Date.now()}${ext}`);
   }
 
+  private sessionImagesDir(): string | undefined {
+    const sessionId = this.focused.client?.sessionId ?? this.focused.activeSessionId;
+    if (!sessionId) return undefined;
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    return path.join(sessionsDirFor(resolveGrokHome(process.env), cwd), sessionId, "images");
+  }
+
+  private addImageAttachment(absPath: string, mimeType: string): void {
+    const imageIndex = nextImageIndex(this.chips);
+    this.chips.push(makeImageChip(absPath, imageIndex, mimeType));
+    this.postChips();
+  }
+
+  /** Save clipboard bytes into the live session's `images/` dir (grok TUI parity). */
+  private addPastedImage(base64: string, mimeType: string): void {
+    const imagesDir = this.sessionImagesDir();
+    if (!imagesDir) return;
+    fs.mkdirSync(imagesDir, { recursive: true });
+    const fileName = `image-${randomUUID()}${extFromMime(mimeType)}`;
+    const absPath = path.join(imagesDir, fileName);
+    fs.writeFileSync(absPath, Buffer.from(base64, "base64"));
+    this.addImageAttachment(absPath, mimeType);
+    this.reveal();
+  }
+
+  /** Copy an on-disk image into the session `images/` folder when it lives elsewhere. */
+  private importImageToSession(srcPath: string, mimeType: string): void {
+    const imagesDir = this.sessionImagesDir();
+    if (!imagesDir) return;
+    fs.mkdirSync(imagesDir, { recursive: true });
+    const fileName = `image-${randomUUID()}${path.extname(srcPath) || extFromMime(mimeType)}`;
+    const dest = path.join(imagesDir, fileName);
+    fs.copyFileSync(srcPath, dest);
+    this.addImageAttachment(dest, mimeType);
+  }
+
   private addDroppedFile(absPath: string, shiftHeld: boolean): void {
     if (!fs.existsSync(absPath)) return;
+    if (!shiftHeld && isImagePath(absPath)) {
+      this.importImageToSession(absPath, mimeFromPath(absPath));
+      return;
+    }
     const uri = vscode.Uri.file(absPath);
     const relPath = vscode.workspace.asRelativePath(uri);
     if (shiftHeld) {
@@ -2672,10 +2722,15 @@ See design doc for the full state machine diagram.`;
     const session = this.focused;
     const gen = session.gen;
 
-    const finalPrompt = buildPrompt(text, chips, {
+    const { text: promptText, images } = buildPromptWithImages(text, chips, {
       readFile: (p) => fs.readFileSync(p, "utf8"),
+      readFileBinary: (p) => fs.readFileSync(p),
       extName: (p) => path.extname(p),
     });
+    const promptBlocks: PromptContentBlock[] = [{ type: "text", text: promptText }];
+    for (const img of images) {
+      promptBlocks.push({ type: "image", mimeType: img.mimeType, data: img.data });
+    }
 
     this.chips = [];
     this.postChips();
@@ -2683,7 +2738,7 @@ See design doc for the full state machine diagram.`;
     const isFirstSend = !session.hasHistory;
     session.hasHistory = true;
     if (isFirstSend) {
-      session.firstUserMessageForTitle = text;
+      session.firstUserMessageForTitle = text || (images.length ? `[Image #${images[0].index}]` : "");
       // One `session_start` per session, on the first real user message — never
       // the primer (that takes a separate prompt path that doesn't set hasHistory).
       this.reportSessionStart(session);
@@ -2703,7 +2758,7 @@ See design doc for the full state machine diagram.`;
       // indicator covers the gap. If the eager primer failed, this retries it.
       await this.ensurePrimed(client, session, gen);
       if (gen !== session.gen) return;
-      const meta = await client.prompt(finalPrompt);
+      const meta = await client.prompt(promptBlocks);
       if (gen !== session.gen) return; // session was switched mid-turn
       // Skip agentEnd if a verdict was clicked mid-turn (afterTurn is queued).
       // Otherwise busy clears here, then the user could send during the brief

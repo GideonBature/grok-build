@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   clearImplicitChips,
+  isImagePath,
   makeExplicitChip,
+  makeImageChip,
   makeImplicitChip,
+  nextImageIndex,
   removeChip,
   toggleChip,
 } from "../src/chips";
@@ -52,5 +55,24 @@ describe("chips", () => {
     const exp = makeExplicitChip("/b", "b");
     const result = clearImplicitChips([imp, exp]);
     expect(result).toEqual([exp]);
+  });
+
+  it("isImagePath matches common image extensions", () => {
+    expect(isImagePath("/tmp/a.PNG")).toBe(true);
+    expect(isImagePath("clip.jpeg")).toBe(true);
+    expect(isImagePath("notes.md")).toBe(false);
+  });
+
+  it("makeImageChip labels relPath as Image #N", () => {
+    const c = makeImageChip("/sess/images/x.png", 2, "image/png");
+    expect(c.relPath).toBe("Image #2");
+    expect(c.imageIndex).toBe(2);
+    expect(c.mimeType).toBe("image/png");
+  });
+
+  it("nextImageIndex returns one past the highest attached image", () => {
+    const chips = [makeImageChip("/a.png", 1, "image/png"), makeImageChip("/b.png", 3, "image/png")];
+    expect(nextImageIndex(chips)).toBe(4);
+    expect(nextImageIndex([])).toBe(1);
   });
 });

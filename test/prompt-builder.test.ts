@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildPrompt, CONTEXT_TAG_OPEN, CONTEXT_TAG_CLOSE } from "../src/prompt-builder";
-import { makeImplicitChip, makeExplicitChip } from "../src/chips";
+import { buildPrompt, buildPromptWithImages, CONTEXT_TAG_OPEN, CONTEXT_TAG_CLOSE } from "../src/prompt-builder";
+import { makeImplicitChip, makeExplicitChip, makeImageChip } from "../src/chips";
 
 const deps = {
   readFile: (p: string) => {
@@ -94,5 +94,47 @@ describe("buildPrompt", () => {
       extName: () => "",
     });
     expect(out).toContain("```\nall:");
+  });
+});
+
+describe("buildPromptWithImages", () => {
+  const imageDeps = {
+    readFile: (p: string) => {
+      if (p === "/a.ts") return "line1\nline2";
+      throw new Error("ENOENT");
+    },
+    readFileBinary: (p: string) => {
+      if (p === "/img.png") return Buffer.from("pngbytes");
+      throw new Error("ENOENT");
+    },
+    extName: deps.extName,
+  };
+
+  it("prefixes a single image inline with user text and emits a base64 block", () => {
+    const img = makeImageChip("/img.png", 1, "image/png");
+    const out = buildPromptWithImages("what is this?", [img], imageDeps);
+    expect(out.text).toBe("[Image #1] what is this?");
+    expect(out.images).toEqual([{ index: 1, mimeType: "image/png", data: Buffer.from("pngbytes").toString("base64") }]);
+  });
+
+  it("keeps file context separate from image tags", () => {
+    const file = makeExplicitChip("/a.ts", "src/a.ts");
+    const img = makeImageChip("/img.png", 1, "image/png");
+    const out = buildPromptWithImages("compare", [file, img], imageDeps);
+    expect(out.text).toBe(
+      `${CONTEXT_TAG_OPEN}\nAttached file: src/a.ts\n${CONTEXT_TAG_CLOSE}\n\n[Image #1] compare`,
+    );
+    expect(out.images).toHaveLength(1);
+  });
+
+  it("lists multiple images on separate lines when there is no trailing text", () => {
+    const a = makeImageChip("/a.png", 1, "image/png");
+    const b = makeImageChip("/b.png", 2, "image/jpeg");
+    const out = buildPromptWithImages("", [a, b], {
+      ...imageDeps,
+      readFileBinary: () => Buffer.from("x"),
+    });
+    expect(out.text).toBe("[Image #1]\n[Image #2]");
+    expect(out.images).toHaveLength(2);
   });
 });

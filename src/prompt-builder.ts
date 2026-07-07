@@ -1,8 +1,20 @@
-import { isImplicitChip, type FileChip } from "./chips";
+import { isImageChip, isImplicitChip, type FileChip } from "./chips";
 
 export interface PromptBuilderDeps {
   readFile: (path: string) => string;
+  readFileBinary?: (path: string) => Buffer;
   extName: (path: string) => string;
+}
+
+export interface PromptImage {
+  index: number;
+  mimeType: string;
+  data: string;
+}
+
+export interface BuildPromptWithImagesResult {
+  text: string;
+  images: PromptImage[];
 }
 
 // The file-path context (attached files + the open-editor file) is wrapped in a
@@ -88,4 +100,58 @@ export function buildPrompt(
   parts.push(...blocks);
   if (text) parts.push(text);
   return parts.join("\n\n");
+}
+
+/**
+ * Build the ACP prompt payload for a user turn: a text block (file context +
+ * `[Image #N]` tags + typed message) plus zero or more inline image blocks.
+ *
+ * Image chips are **not** handed to grok as bare paths — that would make it call
+ * `fs/read_text_file` and fail on binaries. Instead we mirror the grok TUI:
+ * `[Image #1]` in the text and a separate `{type:"image", data:<base64>}` block.
+ */
+export function buildPromptWithImages(
+  text: string,
+  chips: FileChip[],
+  deps: PromptBuilderDeps,
+): BuildPromptWithImagesResult {
+  const imageChips = chips
+    .filter((c) => !c.hidden && isImageChip(c))
+    .sort((a, b) => (a.imageIndex ?? 0) - (b.imageIndex ?? 0));
+  const fileChips = chips.filter((c) => !c.hidden && !isImageChip(c));
+
+  const filePrompt = buildPrompt("", fileChips, deps);
+  const imageTags = imageChips.map((c) => `[Image #${c.imageIndex}]`);
+
+  let userPart = "";
+  if (imageTags.length === 1 && text) {
+    userPart = `${imageTags[0]} ${text}`;
+  } else if (imageTags.length) {
+    userPart = imageTags.join("\n");
+    if (text) userPart += `\n\n${text}`;
+  } else {
+    userPart = text;
+  }
+
+  const parts: string[] = [];
+  if (filePrompt) parts.push(filePrompt);
+  if (userPart) parts.push(userPart);
+  const promptText = parts.join("\n\n");
+
+  const readBinary = deps.readFileBinary ?? (() => Buffer.alloc(0));
+  const images: PromptImage[] = [];
+  for (const chip of imageChips) {
+    try {
+      const data = readBinary(chip.path).toString("base64");
+      images.push({
+        index: chip.imageIndex!,
+        mimeType: chip.mimeType ?? "image/png",
+        data,
+      });
+    } catch {
+      /* skip unreadable image — text tag still goes through */
+    }
+  }
+
+  return { text: promptText, images };
 }
