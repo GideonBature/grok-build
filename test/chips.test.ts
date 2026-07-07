@@ -1,11 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
+  MAX_VISION_IMAGE_BYTES,
   clearImplicitChips,
-  isImagePath,
+  extFromMime,
+  isVisionImagePath,
+  isVisionMime,
   makeExplicitChip,
   makeImageChip,
   makeImplicitChip,
-  nextImageIndex,
+  mimeFromPath,
   removeChip,
   toggleChip,
 } from "../src/chips";
@@ -57,22 +60,45 @@ describe("chips", () => {
     expect(result).toEqual([exp]);
   });
 
-  it("isImagePath matches common image extensions", () => {
-    expect(isImagePath("/tmp/a.PNG")).toBe(true);
-    expect(isImagePath("clip.jpeg")).toBe(true);
-    expect(isImagePath("notes.md")).toBe(false);
+  it("isVisionImagePath accepts raster vision formats only", () => {
+    expect(isVisionImagePath("/tmp/a.PNG")).toBe(true);
+    expect(isVisionImagePath("clip.jpeg")).toBe(true);
+    expect(isVisionImagePath("anim.webp")).toBe(true);
+    // SVG is an editable text source — it must stay a path chip so grok can
+    // read/edit the file; BMP is undocumented for the vision API and huge.
+    expect(isVisionImagePath("logo.svg")).toBe(false);
+    expect(isVisionImagePath("shot.bmp")).toBe(false);
+    expect(isVisionImagePath("notes.md")).toBe(false);
   });
 
-  it("makeImageChip labels relPath as Image #N", () => {
-    const c = makeImageChip("/sess/images/x.png", 2, "image/png");
+  it("isVisionMime mirrors the extension whitelist", () => {
+    expect(isVisionMime("image/png")).toBe(true);
+    expect(isVisionMime("image/JPEG")).toBe(true);
+    expect(isVisionMime("image/svg+xml")).toBe(false);
+    expect(isVisionMime("image/bmp")).toBe(false);
+    expect(isVisionMime("text/plain")).toBe(false);
+  });
+
+  it("mimeFromPath and extFromMime are derived from one table", () => {
+    expect(mimeFromPath("/a/b.JPG")).toBe("image/jpeg");
+    expect(mimeFromPath("/a/b.jpeg")).toBe("image/jpeg");
+    expect(mimeFromPath("noext")).toBe("image/png"); // no extension → safe default
+    expect(extFromMime("image/jpeg")).toBe(".jpg"); // canonical ext, not .jpeg
+    expect(extFromMime("image/webp")).toBe(".webp");
+    expect(extFromMime("application/octet-stream")).toBe(".png");
+  });
+
+  it("caps vision images at the documented 20MiB", () => {
+    expect(MAX_VISION_IMAGE_BYTES).toBe(20 * 1024 * 1024);
+  });
+
+  it("makeImageChip labels relPath as Image #N and carries the origin path", () => {
+    const c = makeImageChip("/staging/x.png", 2, "image/png", "assets/hero.png");
     expect(c.relPath).toBe("Image #2");
     expect(c.imageIndex).toBe(2);
     expect(c.mimeType).toBe("image/png");
-  });
-
-  it("nextImageIndex returns one past the highest attached image", () => {
-    const chips = [makeImageChip("/a.png", 1, "image/png"), makeImageChip("/b.png", 3, "image/png")];
-    expect(nextImageIndex(chips)).toBe(4);
-    expect(nextImageIndex([])).toBe(1);
+    expect(c.originRelPath).toBe("assets/hero.png");
+    const pasted = makeImageChip("/staging/y.png", 3, "image/png");
+    expect(pasted.originRelPath).toBeUndefined();
   });
 });

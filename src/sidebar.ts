@@ -33,19 +33,20 @@ import {
 import { TerminalManager } from "./terminal-manager";
 import {
   FileChip,
+  MAX_VISION_IMAGE_BYTES,
   clearImplicitChips,
   extFromMime,
-  isImagePath,
+  isImageChip,
+  isVisionImagePath,
+  isVisionMime,
   makeExplicitChip,
   makeImageChip,
   makeImplicitChip,
   mimeFromPath,
-  nextImageIndex,
   removeChip,
   toggleChip,
 } from "./chips";
-import { buildPromptWithImages } from "./prompt-builder";
-import type { PromptContentBlock } from "./acp";
+import { buildPromptWithImages, type PromptImageInput } from "./prompt-builder";
 import { parseFileRef, shouldReadFileInline } from "./file-ref";
 import { pickRejectOption, shouldRejectPermission } from "./plan-gate";
 import { appendPlanEntry, decideRestoreState } from "./plan-restore";
@@ -68,7 +69,7 @@ import {
 
 type WebviewMsg =
   | { type: "ready" }
-  | { type: "send"; text: string; chips: FileChip[] }
+  | { type: "send"; text: string; chips?: FileChip[]; bare?: boolean }
   | { type: "newSession" }
   | { type: "cancel" }
   | { type: "pickModel" }
@@ -251,6 +252,7 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(GROK_DIFF_SCHEME, this.diffProvider),
     );
+    void this.sweepImageStaging();
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -267,7 +269,16 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       ],
     };
     view.webview.html = this.getHtml(view.webview);
-    view.webview.onDidReceiveMessage((m: WebviewMsg) => this.onMessage(m));
+    // Message handlers run async; without this catch a throw (e.g. an fs error
+    // in an image-attach path) becomes a silent unhandled rejection and the
+    // user's action just... does nothing.
+    view.webview.onDidReceiveMessage((m: WebviewMsg) => {
+      void this.onMessage(m).catch((e) => {
+        const msg = (e as Error)?.message ?? String(e);
+        this.output.appendLine(`[webview] ${m.type} failed: ${msg}`);
+        void vscode.window.showErrorMessage(`Grok: ${m.type} failed — ${msg}`);
+      });
+    });
     this.watchActiveEditor();
     // Periodic idle-TTL sweep over the live-session pool (the LRU cap is enforced
     // eagerly on each new start; this catches sessions that simply went stale).
@@ -1411,6 +1422,13 @@ See design doc for the full state machine diagram.`;
         session.userMessageCount += 1;
         session.inUserMessage = true;
       }
+      // Re-seed the session-scoped [Image #N] counter from replayed prompts so
+      // images attached after a restore keep monotonically increasing tags
+      // instead of colliding with history's numbering.
+      for (const m of text.matchAll(/\[Image #(\d+)\]/g)) {
+        const n = Number(m[1]);
+        if (n > session.imageCounter) session.imageCounter = n;
+      }
       this.emit(session, { type: "userMessageChunk", text });
     });
     client.on("thoughtChunk", (text: string) => {
@@ -1693,7 +1711,7 @@ See design doc for the full state machine diagram.`;
         this.postInitialState();
         break;
       case "send":
-        await this.handleSend(msg.text, msg.chips);
+        await this.handleSend(msg.text, msg.bare === true);
         break;
       case "newSession":
         await this.newFocusedSession();
@@ -1707,10 +1725,17 @@ See design doc for the full state machine diagram.`;
       case "setMode":
         await this.setMode(msg.modeId);
         break;
-      case "removeChip":
+      case "removeChip": {
+        // A removed image chip's staged file has no other reference — reclaim
+        // it now instead of leaving multi-MB orphans until the weekly sweep.
+        const removed = this.chips.find((c) => c.id === msg.id);
+        if (removed && isImageChip(removed)) {
+          void fs.promises.unlink(removed.path).catch(() => {});
+        }
         this.chips = removeChip(this.chips, msg.id);
         this.postChips();
         break;
+      }
       case "toggleChip":
         this.chips = toggleChip(this.chips, msg.id);
         this.postChips();
@@ -1749,10 +1774,10 @@ See design doc for the full state machine diagram.`;
         await this.exportExpr(msg);
         break;
       case "dropFile":
-        this.addDroppedFile(msg.path, msg.shift);
+        await this.addDroppedFile(msg.path, msg.shift);
         break;
       case "pasteImage":
-        this.addPastedImage(msg.data, msg.mimeType);
+        await this.addPastedImage(msg.data, msg.mimeType);
         break;
       case "permissionAnswer":
         this.focused.client?.respondPermission(msg.requestId, msg.optionId);
@@ -2196,7 +2221,13 @@ See design doc for the full state machine diagram.`;
     });
     if (!picked || picked.length === 0) return;
     for (const uri of picked) {
-      this.addDroppedFile(uri.fsPath, false);
+      try {
+        await this.addDroppedFile(uri.fsPath, false);
+      } catch (e) {
+        // Per-file: one unreadable pick must not abort the rest of a multi-select.
+        this.output.appendLine(`[image] could not attach ${uri.fsPath}: ${(e as Error).message}`);
+        void vscode.window.showErrorMessage(`Grok: could not attach ${path.basename(uri.fsPath)} — ${(e as Error).message}`);
+      }
     }
     this.reveal();
   }
@@ -2649,47 +2680,102 @@ See design doc for the full state machine diagram.`;
     return vscode.Uri.joinPath(dir, `${stem}-${Date.now()}${ext}`);
   }
 
-  private sessionImagesDir(): string | undefined {
-    const sessionId = this.focused.client?.sessionId ?? this.focused.activeSessionId;
-    if (!sessionId) return undefined;
-    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-    return path.join(sessionsDirFor(resolveGrokHome(process.env), cwd), sessionId, "images");
+  /**
+   * Session-NEUTRAL staging dir for images waiting in the composer. Deliberately
+   * NOT the grok session dir: composer chips are provider-level state that
+   * outlives sessions, while a session dir is deleted by the empty-session
+   * cleanup (parkFocused / discardRestartedEmptySession / history delete), which
+   * would kill a pasted screenshot before it was ever sent. Staging also works
+   * with no live session at all (paste during startup/onboarding just works).
+   */
+  private imageStagingDir(): string {
+    return path.join(this.context.globalStorageUri.fsPath, "image-staging");
   }
 
-  private addImageAttachment(absPath: string, mimeType: string): void {
-    const imageIndex = nextImageIndex(this.chips);
-    this.chips.push(makeImageChip(absPath, imageIndex, mimeType));
+  /** Delete staged images older than 7 days. A pending attachment lives for
+   *  minutes; anything week-old is an orphan (pasted, never sent, window
+   *  closed). The age gate keeps a second VS Code window's fresh staging
+   *  files safe — globalStorage is shared across windows. */
+  private async sweepImageStaging(): Promise<void> {
+    const dir = this.imageStagingDir();
+    try {
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      for (const name of await fs.promises.readdir(dir)) {
+        const p = path.join(dir, name);
+        try {
+          if ((await fs.promises.stat(p)).mtimeMs < cutoff) await fs.promises.unlink(p);
+        } catch { /* raced or locked — next sweep gets it */ }
+      }
+    } catch { /* staging dir doesn't exist yet */ }
+  }
+
+  /** Write image bytes into staging and attach the chip. The `[Image #N]`
+   *  index is session-scoped (Session.imageCounter) so tags stay unique across
+   *  the whole conversation, not just one composer batch. */
+  private async stageImageAttachment(
+    bytes: Buffer,
+    mimeType: string,
+    originRelPath?: string,
+  ): Promise<void> {
+    const dir = this.imageStagingDir();
+    await fs.promises.mkdir(dir, { recursive: true });
+    const absPath = path.join(dir, `image-${randomUUID()}${extFromMime(mimeType)}`);
+    await fs.promises.writeFile(absPath, bytes);
+    const imageIndex = ++this.focused.imageCounter;
+    this.chips.push(makeImageChip(absPath, imageIndex, mimeType, originRelPath));
     this.postChips();
   }
 
-  /** Save clipboard bytes into the live session's `images/` dir (grok TUI parity). */
-  private addPastedImage(base64: string, mimeType: string): void {
-    const imagesDir = this.sessionImagesDir();
-    if (!imagesDir) return;
-    fs.mkdirSync(imagesDir, { recursive: true });
-    const fileName = `image-${randomUUID()}${extFromMime(mimeType)}`;
-    const absPath = path.join(imagesDir, fileName);
-    fs.writeFileSync(absPath, Buffer.from(base64, "base64"));
-    this.addImageAttachment(absPath, mimeType);
-    this.reveal();
+  /** Clipboard paste from the webview (base64 + mime, already prefiltered to
+   *  raster image types there — re-checked here since the webview isn't a
+   *  trust boundary). */
+  private async addPastedImage(base64: string, mimeType: string): Promise<void> {
+    try {
+      if (!isVisionMime(mimeType)) {
+        void vscode.window.showErrorMessage(`Grok: unsupported image type ${mimeType} — use PNG, JPEG, GIF, or WebP.`);
+        return;
+      }
+      const bytes = Buffer.from(base64, "base64");
+      if (bytes.length === 0) return;
+      if (bytes.length > MAX_VISION_IMAGE_BYTES) {
+        void vscode.window.showErrorMessage("Grok: pasted image exceeds the 20 MiB vision limit.");
+        return;
+      }
+      await this.stageImageAttachment(bytes, mimeType);
+      this.reveal();
+    } catch (e) {
+      this.output.appendLine(`[image] paste failed: ${(e as Error).message}`);
+      void vscode.window.showErrorMessage(`Grok: could not attach the pasted image — ${(e as Error).message}`);
+    }
   }
 
-  /** Copy an on-disk image into the session `images/` folder when it lives elsewhere. */
-  private importImageToSession(srcPath: string, mimeType: string): void {
-    const imagesDir = this.sessionImagesDir();
-    if (!imagesDir) return;
-    fs.mkdirSync(imagesDir, { recursive: true });
-    const fileName = `image-${randomUUID()}${path.extname(srcPath) || extFromMime(mimeType)}`;
-    const dest = path.join(imagesDir, fileName);
-    fs.copyFileSync(srcPath, dest);
-    this.addImageAttachment(dest, mimeType);
+  /** Copy an on-disk raster image into staging as a vision attachment, keeping
+   *  the workspace-relative origin so the prompt tag can carry the real file
+   *  identity. Returns false when the file should stay a plain path chip
+   *  (oversized, or unreadable as a regular file). */
+  private async importImageFromDisk(srcPath: string): Promise<boolean> {
+    const stat = await fs.promises.stat(srcPath);
+    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_VISION_IMAGE_BYTES) return false;
+    const bytes = await fs.promises.readFile(srcPath);
+    const uri = vscode.Uri.file(srcPath);
+    const rel = vscode.workspace.asRelativePath(uri);
+    // asRelativePath returns the input unchanged for files outside the
+    // workspace — only carry the origin when it's a real workspace-relative path.
+    const originRelPath = rel !== srcPath && rel !== uri.fsPath ? rel : undefined;
+    await this.stageImageAttachment(bytes, mimeFromPath(srcPath), originRelPath);
+    return true;
   }
 
-  private addDroppedFile(absPath: string, shiftHeld: boolean): void {
+  private async addDroppedFile(absPath: string, shiftHeld: boolean): Promise<void> {
     if (!fs.existsSync(absPath)) return;
-    if (!shiftHeld && isImagePath(absPath)) {
-      this.importImageToSession(absPath, mimeFromPath(absPath));
-      return;
+    if (!shiftHeld && isVisionImagePath(absPath)) {
+      try {
+        if (await this.importImageFromDisk(absPath)) return;
+      } catch (e) {
+        this.output.appendLine(`[image] import failed for ${absPath}: ${(e as Error).message}`);
+      }
+      // Oversized / unreadable-as-image → fall through to a plain path chip,
+      // the pre-vision behavior (grok decides how to consume the path).
     }
     const uri = vscode.Uri.file(absPath);
     const relPath = vscode.workspace.asRelativePath(uri);
@@ -2716,29 +2802,63 @@ See design doc for the full state machine diagram.`;
     this.postChips();
   }
 
-  private async handleSend(text: string, chips: FileChip[]): Promise<void> {
+  private async handleSend(text: string, bare = false): Promise<void> {
     const client = await this.ensureClient();
     if (!client) return;
     const session = this.focused;
     const gen = session.gen;
 
-    const { text: promptText, images } = buildPromptWithImages(text, chips, {
-      readFile: (p) => fs.readFileSync(p, "utf8"),
-      readFileBinary: (p) => fs.readFileSync(p),
-      extName: (p) => path.extname(p),
-    });
-    const promptBlocks: PromptContentBlock[] = [{ type: "text", text: promptText }];
-    for (const img of images) {
-      promptBlocks.push({ type: "image", mimeType: img.mimeType, data: img.data });
+    // Snapshot the HOST's chips — the webview copy is a render mirror of these
+    // (every mutation routes through us + postChips), and message ordering
+    // guarantees a pasteImage posted before send has already landed here.
+    // `bare` sends (gear-menu /compact) deliberately carry no attachments.
+    const chips = bare ? [] : [...this.chips];
+
+    // Pre-read every visible image BEFORE anything is cleared or sent. Any
+    // failure blocks the whole send with the chips intact — never a prompt
+    // whose [Image #N] tag has no image block behind it (a dangling tag sends
+    // grok hunting the workspace for an image it was never given).
+    const images: PromptImageInput[] = [];
+    for (const chip of chips) {
+      if (chip.hidden || !isImageChip(chip)) continue;
+      try {
+        const bytes = await fs.promises.readFile(chip.path);
+        if (bytes.length === 0) throw new Error("file is empty");
+        images.push({
+          index: chip.imageIndex!,
+          mimeType: chip.mimeType ?? "image/png",
+          data: bytes.toString("base64"),
+          relPath: chip.originRelPath,
+        });
+      } catch (e) {
+        if (gen !== session.gen) return;
+        this.emit(session, {
+          type: "agentError",
+          text: `Could not read ${chip.relPath} (${(e as Error).message}). Remove the attachment and try again.`,
+        });
+        return;
+      }
     }
 
-    this.chips = [];
+    const { blocks: promptBlocks } = buildPromptWithImages(text, chips, images, {
+      readFile: (p) => fs.readFileSync(p, "utf8"),
+      extName: (p) => path.extname(p),
+    });
+
+    this.chips = bare ? this.chips : [];
     this.postChips();
+    // Staged files are one-shot: their bytes ride the prompt inline now.
+    for (const chip of chips) {
+      if (isImageChip(chip)) void fs.promises.unlink(chip.path).catch(() => {});
+    }
 
     const isFirstSend = !session.hasHistory;
     session.hasHistory = true;
     if (isFirstSend) {
-      session.firstUserMessageForTitle = text || (images.length ? `[Image #${images[0].index}]` : "");
+      // Image-only first message: leave the title source empty so grok's own
+      // generated summary shows through, instead of pinning a permanent
+      // "[Image #1]" customName over every screenshot-first session.
+      session.firstUserMessageForTitle = text;
       // One `session_start` per session, on the first real user message — never
       // the primer (that takes a separate prompt path that doesn't set hasHistory).
       this.reportSessionStart(session);

@@ -115,6 +115,16 @@ export class Session {
   /** grok's id for this session (set on session/new or session/load). */
   activeSessionId?: string;
 
+  /**
+   * Session-scoped `[Image #N]` counter — the highest index used so far.
+   * Incremented per attached image and NEVER reset on send, so every image in
+   * one conversation gets a distinct tag (per-composer numbering would restart
+   * at #1 each turn and make "image #1" ambiguous in the transcript). On
+   * restore it's re-seeded from the replayed prompts' tags (sidebar's
+   * userMessageChunk handler).
+   */
+  imageCounter = 0;
+
   titleGenerated = false;
   firstUserMessageForTitle?: string;
 

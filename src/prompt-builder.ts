@@ -1,20 +1,22 @@
 import { isImageChip, isImplicitChip, type FileChip } from "./chips";
+import type { PromptContentBlock } from "./acp";
 
 export interface PromptBuilderDeps {
   readFile: (path: string) => string;
-  readFileBinary?: (path: string) => Buffer;
   extName: (path: string) => string;
 }
 
-export interface PromptImage {
+/** One attached image, pre-read by the host (the builder never touches the
+ *  filesystem — an unreadable image must block the send in the host, not be
+ *  silently skipped here). */
+export interface PromptImageInput {
   index: number;
   mimeType: string;
+  /** base64 payload */
   data: string;
-}
-
-export interface BuildPromptWithImagesResult {
-  text: string;
-  images: PromptImage[];
+  /** Workspace-relative origin path for images imported from disk — carried in
+   *  the tag (`[Image #N] (assets/x.png)`) so grok keeps the file's identity. */
+  relPath?: string;
 }
 
 // The file-path context (attached files + the open-editor file) is wrapped in a
@@ -34,11 +36,12 @@ export const CONTEXT_TAG_CLOSE = "</vscode-context>";
  * - A chip with a selection range becomes a fenced code block of those lines.
  * - A chip without a range becomes a bare path — NOT an `@`-reference. `@` is grok's
  *   "read this whole file" convention, which slurps a large file into context (a big
- *   CSV/log) and fails outright on binaries (an image/video → *"Cannot read binary
- *   file"*; grok has no vision). Handing grok the plain path lets it choose how to
- *   consume each: grep/range-read big text, pass an image/video path to its media
- *   tools, read a small file in full. No per-type classification — grok infers from
- *   the extension.
+ *   CSV/log) and fails outright on binaries. Handing grok the plain path lets it
+ *   choose how to consume each: grep/range-read big text, pass a video path to its
+ *   media tools, read a small file in full. Raster images (png/jpg/gif/webp) are
+ *   split off UPSTREAM (addDroppedFile → makeImageChip) and ride the inline-vision
+ *   blocks in buildPromptWithImages instead — what reaches this path list is text,
+ *   SVG (kept editable on purpose), videos, and oversized images.
  * - Whole-file chips are split by origin: a file the user explicitly attached is the
  *   strong "act on this" signal ("Attached file(s)"), while the active-editor file
  *   auto-included for ambient context is the weaker "this is what I'm looking at"
@@ -103,55 +106,43 @@ export function buildPrompt(
 }
 
 /**
- * Build the ACP prompt payload for a user turn: a text block (file context +
- * `[Image #N]` tags + typed message) plus zero or more inline image blocks.
+ * Build the ACP prompt payload for a user turn: one text block (file context +
+ * typed message + `[Image #N]` tags) followed by an image content block per
+ * attached image (base64 inline — verified accepted by grok 0.2.87 despite the
+ * advertised `promptCapabilities.image:false`; see research/vision-input.md).
  *
- * Image chips are **not** handed to grok as bare paths — that would make it call
- * `fs/read_text_file` and fail on binaries. Instead we mirror the grok TUI:
- * `[Image #1]` in the text and a separate `{type:"image", data:<base64>}` block.
+ * Shape invariants:
+ * - No images → the text is byte-identical to `buildPrompt(text, chips)`, so
+ *   the restore parser (`parseAttachmentContext`) sees the exact legacy wire.
+ * - With images → `<envelope>\n\n<text>\n\n<tags>`: the user's text stays at
+ *   the start of its own section (a leading tag would knock a `/command` off
+ *   position 0 and break CLI slash dispatch), and each tag sits on its own
+ *   trailing line, carrying the origin workspace path when there is one so
+ *   grok can act on the real file, not just the pixels.
+ * - `blocks[0]` is always the text block; image blocks follow in tag order.
+ *   The restore side parses tags back out via `parseImageTags` in
+ *   media/webview-helpers.js — keep the tag format in sync with it.
  */
 export function buildPromptWithImages(
   text: string,
   chips: FileChip[],
+  images: PromptImageInput[],
   deps: PromptBuilderDeps,
-): BuildPromptWithImagesResult {
-  const imageChips = chips
-    .filter((c) => !c.hidden && isImageChip(c))
-    .sort((a, b) => (a.imageIndex ?? 0) - (b.imageIndex ?? 0));
-  const fileChips = chips.filter((c) => !c.hidden && !isImageChip(c));
-
+): { text: string; blocks: PromptContentBlock[] } {
+  const fileChips = chips.filter((c) => !isImageChip(c));
+  if (images.length === 0) {
+    const plain = buildPrompt(text, fileChips, deps);
+    return { text: plain, blocks: [{ type: "text", text: plain }] };
+  }
+  const sorted = [...images].sort((a, b) => a.index - b.index);
+  const tagLines = sorted
+    .map((im) => (im.relPath ? `[Image #${im.index}] (${im.relPath})` : `[Image #${im.index}]`))
+    .join("\n");
   const filePrompt = buildPrompt("", fileChips, deps);
-  const imageTags = imageChips.map((c) => `[Image #${c.imageIndex}]`);
-
-  let userPart = "";
-  if (imageTags.length === 1 && text) {
-    userPart = `${imageTags[0]} ${text}`;
-  } else if (imageTags.length) {
-    userPart = imageTags.join("\n");
-    if (text) userPart += `\n\n${text}`;
-  } else {
-    userPart = text;
+  const promptText = [filePrompt, text, tagLines].filter(Boolean).join("\n\n");
+  const blocks: PromptContentBlock[] = [{ type: "text", text: promptText }];
+  for (const im of sorted) {
+    blocks.push({ type: "image", mimeType: im.mimeType, data: im.data });
   }
-
-  const parts: string[] = [];
-  if (filePrompt) parts.push(filePrompt);
-  if (userPart) parts.push(userPart);
-  const promptText = parts.join("\n\n");
-
-  const readBinary = deps.readFileBinary ?? (() => Buffer.alloc(0));
-  const images: PromptImage[] = [];
-  for (const chip of imageChips) {
-    try {
-      const data = readBinary(chip.path).toString("base64");
-      images.push({
-        index: chip.imageIndex!,
-        mimeType: chip.mimeType ?? "image/png",
-        data,
-      });
-    } catch {
-      /* skip unreadable image — text tag still goes through */
-    }
-  }
-
-  return { text: promptText, images };
+  return { text: promptText, blocks };
 }

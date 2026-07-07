@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — plain JS module, no types
-import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, parseAttachmentContext } from "../media/webview-helpers.js";
-import { buildPrompt } from "../src/prompt-builder";
-import { makeExplicitChip, makeImplicitChip } from "../src/chips";
+import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, parseAttachmentContext, parseImageTags } from "../media/webview-helpers.js";
+import { buildPrompt, buildPromptWithImages } from "../src/prompt-builder";
+import { makeExplicitChip, makeImplicitChip, makeImageChip } from "../src/chips";
 
 describe("looksLikeFileRef", () => {
   it("accepts a bare filename with a known extension", () => {
@@ -178,6 +178,72 @@ describe("parseAttachmentContext", () => {
     expect(files).toEqual([]);
     expect(body).toContain("```ts");
     expect(body).toContain("what is this");
+  });
+});
+
+describe("parseImageTags", () => {
+  const deps = { readFile: () => "", extName: (p: string) => (p.includes(".") ? p.slice(p.lastIndexOf(".")) : "") };
+
+  it("passes plain text through untouched", () => {
+    expect(parseImageTags("just a message")).toEqual({ body: "just a message", images: [] });
+  });
+
+  it("round-trips the current wire shape (text first, trailing tag lines)", () => {
+    const img = makeImageChip("/staging/a.png", 1, "image/png");
+    const { text } = buildPromptWithImages(
+      "what is this?",
+      [img],
+      [{ index: 1, mimeType: "image/png", data: "AA" }],
+      deps,
+    );
+    expect(parseImageTags(text)).toEqual({
+      body: "what is this?",
+      images: [{ index: 1, path: undefined }],
+    });
+  });
+
+  it("recovers the origin path from a disk-import tag", () => {
+    const out = parseImageTags("compress this\n\n[Image #2] (assets/hero.png)");
+    expect(out.body).toBe("compress this");
+    expect(out.images).toEqual([{ index: 2, path: "assets/hero.png" }]);
+  });
+
+  it("collects multiple trailing tag lines in order", () => {
+    const out = parseImageTags("compare\n\n[Image #1]\n[Image #3] (a b/c.png)");
+    expect(out.body).toBe("compare");
+    expect(out.images).toEqual([
+      { index: 1, path: undefined },
+      { index: 3, path: "a b/c.png" },
+    ]);
+  });
+
+  it("strips the legacy leading tag lines (first-build wire)", () => {
+    const out = parseImageTags("[Image #1]\n[Image #2]\n\ndescribe both");
+    expect(out.body).toBe("describe both");
+    expect(out.images.map((i: { index: number }) => i.index)).toEqual([1, 2]);
+  });
+
+  it("strips the legacy single-image inline prefix", () => {
+    const out = parseImageTags("[Image #1] what is this?");
+    expect(out.body).toBe("what is this?");
+    expect(out.images).toEqual([{ index: 1, path: undefined }]);
+  });
+
+  it("leaves a tag-looking string in the MIDDLE of the body alone", () => {
+    const body = "the TUI shows [Image #1] before the text\n\nsee?";
+    expect(parseImageTags(body)).toEqual({ body, images: [] });
+  });
+
+  it("leaves a tag inside a fenced code block alone", () => {
+    const body = "explain:\n```\n[Image #1]\n```\ntrailing words";
+    expect(parseImageTags(body)).toEqual({ body, images: [] });
+  });
+
+  it("handles a tags-only body (image sent with no text)", () => {
+    expect(parseImageTags("[Image #1]")).toEqual({
+      body: "",
+      images: [{ index: 1, path: undefined }],
+    });
   });
 });
 

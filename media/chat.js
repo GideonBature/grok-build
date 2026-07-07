@@ -68,6 +68,10 @@
     activeAgentRaw: "",
     activeUserEl: null,
     activeUserRaw: "",
+    // Count of clipboard images still being read (FileReader in flight). Send
+    // is held while > 0 so a paste-then-Enter can't race the image onto the
+    // NEXT message — the pasteImage post must reach the host before send does.
+    pendingPaste: 0,
     activeThoughtEl: null,
     activeThoughtHdrEl: null,
     thoughtStartTime: null,
@@ -306,7 +310,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, parseAttachmentContext } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, parseAttachmentContext, parseImageTags } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -1029,7 +1033,7 @@
     // ── Session ───────────────────────────────────────────────────────────
     addSection("Session");
     addGearItem("<span>Compact conversation</span>", () => {
-      vscode.postMessage({ type: "send", text: "/compact", chips: [] });
+      vscode.postMessage({ type: "send", text: "/compact", bare: true });
       closePopovers();
     });
 
@@ -1602,7 +1606,7 @@
     const label = chip?.imageIndex != null ? `Image #${chip.imageIndex}` : (pathStr.split(/[\\/]/).pop() || pathStr);
     const icon = chip?.imageIndex != null ? ICON.image : ICON.file;
     tag.innerHTML = icon + `<span>${escapeHtml(truncate(label, 20))}</span>`;
-    tag.title = chip?.path || pathStr;
+    tag.title = chip?.originRelPath || chip?.path || pathStr;
     return tag;
   }
 
@@ -2316,13 +2320,16 @@
     // The replayed prompt carries the <vscode-context> envelope we sent; strip it
     // back out so the bubble shows the user's own words + filename-only chips (with
     // the full path on hover), matching the live send — not the raw paths inline.
+    // Same for the [Image #N] tag lines buildPromptWithImages appended — the
+    // shared parser only strips the leading/trailing tag shapes we produce, so a
+    // tag-looking string in the middle of the user's own words stays put.
     const parsed = parseAttachmentContext(state.activeUserRaw);
-    const imageNums = [...state.activeUserRaw.matchAll(/\[Image #(\d+)\]/g)].map((m) => Number(m[1]));
-    const displayBody = parsed.body.replace(/\[Image #\d+\]\s*/g, "").trim();
-    state.activeUserEl.innerHTML = renderMarkdown(displayBody);
+    const imageTags = parseImageTags(parsed.body);
+    state.activeUserEl.innerHTML = renderMarkdown(imageTags.body);
     const chipTags = [
       ...parsed.files.map((f) => makeMsgChipTag(f)),
-      ...imageNums.map((n) => makeMsgChipTag(`Image #${n}`, { imageIndex: n })),
+      ...imageTags.images.map((im) =>
+        makeMsgChipTag(`Image #${im.index}`, { imageIndex: im.index, path: im.path })),
     ];
     if (chipTags.length) {
       const chipsRow = document.createElement("div");
@@ -3091,7 +3098,9 @@
       if (isUpload) {
         const el = document.createElement("div");
         el.className = "attachment";
-        el.title = chip.path;
+        // For a disk-imported image the interesting path is the ORIGINAL file,
+        // not the staged copy the chip's path points at.
+        el.title = chip.originRelPath || chip.path;
         el.innerHTML = chip.imageIndex != null ? ICON.image : ICON.file;
         const label = document.createElement("span");
         label.textContent = fileName;
@@ -3224,9 +3233,14 @@
       vscode.postMessage({ type: "cancel" });
       return;
     }
+    // A clipboard image is still being read — its pasteImage post hasn't
+    // reached the host yet, so sending now would detach it from this message.
+    // The read settles in milliseconds; the next click/Enter goes through.
+    if (state.pendingPaste > 0) return;
     const text = input.value.trim();
-    const hasImages = state.chips.some((c) => c.imageIndex != null);
-    if (!text && !hasImages && state.chips.every((c) => c.hidden)) return;
+    // Sendable = typed text or any visible chip (file or image alike — image
+    // chips render as remove-only attachment rows, so they're never hidden).
+    if (!text && state.chips.every((c) => c.hidden)) return;
     state.busy = true;
     updateSendButton();
     state.activeAgentEl = null;
@@ -3235,7 +3249,9 @@
     state.activeThoughtHdrEl = null;
     state.thoughtStartTime = null;
     state.activeToolGroupEl = null;
-    vscode.postMessage({ type: "send", text, chips: state.chips });
+    // Chips are host-owned state (every mutation routes through the host and
+    // comes back via postChips) — the host snapshots its own copy on send.
+    vscode.postMessage({ type: "send", text });
     input.value = "";
     renderInputHighlight();
     slashPopover.hidden = true;
@@ -3352,7 +3368,7 @@
     state.activeThoughtHdrEl = null;
     state.thoughtStartTime = null;
     state.activeToolGroupEl = null;
-    vscode.postMessage({ type: "send", text: t, chips: state.chips });
+    vscode.postMessage({ type: "send", text: t });
   }
 
   // Send the next message dictated while Grok was busy (so you can keep talking
@@ -3968,19 +3984,39 @@
   input.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
+    // Collect image FILES synchronously (getAsFile is sync) so the decision to
+    // suppress the default paste is made before any async work. Raster types
+    // only — the host re-checks, this is just the first gate.
+    const blobs = [];
     for (const item of items) {
-      if (!item.type.startsWith("image/")) continue;
-      e.preventDefault();
+      if (item.kind !== "file" || !/^image\/(png|jpeg|gif|webp)$/i.test(item.type)) continue;
       const blob = item.getAsFile();
-      if (!blob) continue;
+      if (blob) blobs.push(blob);
+    }
+    if (blobs.length === 0) return; // plain text (or unsupported) — default paste
+    e.preventDefault();
+    // A mixed clipboard (copy from a web page / Word) carries text alongside
+    // the image; preventDefault killed the text half, so re-insert it manually.
+    const pastedText = e.clipboardData.getData("text/plain");
+    if (pastedText) {
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? start;
+      input.setRangeText(pastedText, start, end, "end");
+      updateSlash();
+      renderInputHighlight();
+    }
+    for (const blob of blobs) {
+      state.pendingPaste += 1;
       const reader = new FileReader();
+      const settle = () => { state.pendingPaste = Math.max(0, state.pendingPaste - 1); };
+      reader.onerror = settle;
       reader.onload = () => {
         const dataUrl = String(reader.result || "");
         const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
         if (m) vscode.postMessage({ type: "pasteImage", mimeType: m[1], data: m[2] });
+        settle();
       };
       reader.readAsDataURL(blob);
-      break;
     }
   });
 

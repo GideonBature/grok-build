@@ -253,6 +253,63 @@ async function testPrompt() {
   } finally { acp.kill(); }
 }
 
+// Vision INPUT (paste/upload → inline {type:"image"} blocks in session/prompt).
+// This wire surface is invisible to every grok-free layer: the CLI still
+// ADVERTISES promptCapabilities.image:false but actually accepts image blocks
+// (verified on 0.2.87 — see research/vision-input.md), so only a live check can
+// catch a build that starts rejecting them (the audio precedent: -32602 killed
+// the whole turn). A solid 256×256 red PNG is generated in-process; the model
+// answering "red" proves the pixels — not just the [Image #1] tag — got through.
+async function testVisionPrompt() {
+  const zlib = require("node:zlib");
+  function crc32(buf) {
+    let c; const table = [];
+    for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; table[n] = c >>> 0; }
+    let crc = 0xffffffff;
+    for (const b of buf) crc = table[(crc ^ b) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+  function chunk(type, data) {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([len, body, crc]);
+  }
+  const n = 256;
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(n, 0); ihdr.writeUInt32BE(n, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(n * 3).fill(Buffer.from([255, 0, 0]))]);
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", zlib.deflateSync(Buffer.concat(Array.from({ length: n }, () => row)))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+
+  const cwd = mkTmp("vision");
+  const acp = new Acp(cwd);
+  try {
+    const init = await withTimeout(acp.send("initialize", INIT), 30000, "init");
+    assert(!init.error, "init errored");
+    const advertised = init.result?.agentCapabilities?.promptCapabilities?.image;
+    const ns = await withTimeout(acp.send("session/new", { cwd, mcpServers: [] }), 30000, "session/new");
+    assert(ns.result && ns.result.sessionId, "session/new failed");
+    const pr = await withTimeout(
+      acp.send("session/prompt", {
+        sessionId: ns.result.sessionId,
+        prompt: [
+          { type: "text", text: "What is the dominant color of this image? Reply with just the color name, one word. No tools.\n\n[Image #1]" },
+          { type: "image", mimeType: "image/png", data: png.toString("base64") },
+        ],
+      }),
+      120000, "vision prompt");
+    assert(!pr.error, "vision prompt REJECTED (capability drift? was accepted on 0.2.87): " + JSON.stringify(pr.error));
+    const text = acp.agentText();
+    assert(/red/i.test(text), `model did not see the image (advertised image:${advertised}); replied: ${text.trim().slice(0, 120)}`);
+    return `model saw the pixels (answered red); advertised promptCapabilities.image=${advertised}`;
+  } finally { acp.kill(); }
+}
+
 async function testRestore() {
   const cwd = mkTmp("restore");
   const MARK = "ZEBRA-RESTORE-CHECK";
@@ -486,6 +543,7 @@ async function testSubagent() {
 const TESTS = [
   { name: "handshake", fn: testHandshake, slow: false },
   { name: "prompt-roundtrip", fn: testPrompt, slow: false },
+  { name: "vision-prompt", fn: testVisionPrompt, slow: false },
   { name: "session-restore", fn: testRestore, slow: false },
   { name: "edit-diff-restore", fn: testEditDiffRestore, slow: false },
   { name: "plan-mode", fn: testPlanMode, slow: false },

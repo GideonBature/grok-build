@@ -99,7 +99,7 @@ rl.on("line", async (line) => {
     case "session/cancel":
       return respondOk(id, {});
     case "session/prompt":
-      return runScenario(id, extractPromptText(params));
+      return runScenario(id, extractPromptText(params), params);
   }
 });
 
@@ -110,13 +110,25 @@ function extractPromptText(params) {
   return "";
 }
 
-async function runScenario(promptId, text) {
+async function runScenario(promptId, text, params) {
   try {
     // grok ≥0.2.33 echoes the live prompt back as a user_message_chunk before it
     // starts working (0.2.3 did not). Model it on EVERY prompt so the host's
     // replay-only de-dup is faithfully exercised by the whole integration suite
     // — the regression that doubled every sent message lived exactly here.
     notify("session/update", { sessionId: SESSION_ID, update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } } });
+
+    if (text.includes("SCENARIO_VISION_ECHO")) {
+      // Echo what vision payload actually crossed the wire, so the test can
+      // assert the client transmits image content blocks verbatim (count,
+      // mime, non-empty base64) — the surface the real CLI consumes.
+      const imgs = (params?.prompt ?? []).filter((b) => b && b.type === "image");
+      const ok = imgs.every((b) => typeof b.data === "string" && b.data.length > 0);
+      const summary = `vision:${imgs.length}:${imgs.map((b) => b.mimeType).join(",")}:${ok}`;
+      notify("session/update", { sessionId: SESSION_ID, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: summary } } });
+      respondOk(promptId, { stopReason: "end_turn", _meta: { totalTokens: 5 } });
+      return;
+    }
 
     if (text.includes("SCENARIO_PROPOSE_PLAN")) {
       // 1. Write to grok's own plan.md (outside the workspace — should be allowed).

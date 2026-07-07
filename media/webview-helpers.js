@@ -253,7 +253,52 @@
     return { files, body };
   }
 
-  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, parseAttachmentContext };
+  // Parse the `[Image #N]` tags that buildPromptWithImages (src/prompt-builder.ts)
+  // puts in the prompt text back out of a replayed body, so restore re-renders
+  // image chips instead of raw tags. Must stay in sync with that format.
+  // Current wire shape: one tag per TRAILING line, `[Image #N]` or
+  // `[Image #N] (origin/rel/path.png)`. Legacy shapes from the first build are
+  // also stripped: LEADING tag lines, and a single leading inline `[Image #N] `
+  // prefix glued to the user's text. A tag-looking string in the MIDDLE of the
+  // body is the user's own words and is left alone. Returns
+  // { body, images: [{index, path?}] } with images in tag order.
+  function parseImageTags(body) {
+    if (typeof body !== "string" || body.indexOf("[Image #") === -1) {
+      return { body: typeof body === "string" ? body : body || "", images: [] };
+    }
+    const TAG_LINE = /^\[Image #(\d+)\](?: \(([^)]*)\))?$/;
+    const lines = body.split("\n");
+    const trailing = [];
+    let end = lines.length;
+    while (end > 0) {
+      const line = lines[end - 1].trim();
+      if (line === "" && trailing.length === 0) { end -= 1; continue; } // trailing blank lines
+      const m = line.match(TAG_LINE);
+      if (!m) break;
+      trailing.unshift({ index: Number(m[1]), path: m[2] || undefined });
+      end -= 1;
+    }
+    let start = 0;
+    const leading = [];
+    while (start < end) {
+      const m = lines[start].trim().match(TAG_LINE);
+      if (!m) break;
+      leading.push({ index: Number(m[1]), path: m[2] || undefined });
+      start += 1;
+    }
+    let rest = lines.slice(start, end).join("\n").trim();
+    // Legacy single-image shape: "[Image #1] what is this?" — tag inline at the
+    // very start of the text. Only strip when it's the body's first characters.
+    const inline = rest.match(/^\[Image #(\d+)\] (?=\S)/);
+    if (inline) {
+      leading.push({ index: Number(inline[1]), path: undefined });
+      rest = rest.slice(inline[0].length);
+    }
+    return { body: rest.trim(), images: [...leading, ...trailing] };
+  }
+
+  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, parseAttachmentContext, parseImageTags };
+
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {

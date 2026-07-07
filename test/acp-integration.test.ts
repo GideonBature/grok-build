@@ -140,6 +140,19 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     expect(meta).toMatchObject({ totalTokens: 10 });
   });
 
+  it("vision: image content blocks cross the wire verbatim alongside the text block", async () => {
+    const chunks: string[] = [];
+    client.on("messageChunk", (t: string) => chunks.push(t));
+    const b64 = Buffer.from("fake-png-bytes").toString("base64");
+    await client.prompt([
+      { type: "text", text: "SCENARIO_VISION_ECHO\n\n[Image #1]\n[Image #2]" },
+      { type: "image", mimeType: "image/png", data: b64 },
+      { type: "image", mimeType: "image/jpeg", data: b64 },
+    ]);
+    // The fake CLI echoes what it actually received: count, mimes, non-empty data.
+    expect(chunks.join("")).toContain("vision:2:image/png,image/jpeg:true");
+  });
+
   it("startup: a valid default effort is forwarded as --reasoning-effort before stdio", async () => {
     const logs: string[] = [];
     const effortClient = new AcpClient({

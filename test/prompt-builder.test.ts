@@ -98,43 +98,84 @@ describe("buildPrompt", () => {
 });
 
 describe("buildPromptWithImages", () => {
-  const imageDeps = {
-    readFile: (p: string) => {
-      if (p === "/a.ts") return "line1\nline2";
-      throw new Error("ENOENT");
-    },
-    readFileBinary: (p: string) => {
-      if (p === "/img.png") return Buffer.from("pngbytes");
-      throw new Error("ENOENT");
-    },
-    extName: deps.extName,
-  };
+  const b64 = Buffer.from("pngbytes").toString("base64");
 
-  it("prefixes a single image inline with user text and emits a base64 block", () => {
-    const img = makeImageChip("/img.png", 1, "image/png");
-    const out = buildPromptWithImages("what is this?", [img], imageDeps);
-    expect(out.text).toBe("[Image #1] what is this?");
-    expect(out.images).toEqual([{ index: 1, mimeType: "image/png", data: Buffer.from("pngbytes").toString("base64") }]);
-  });
-
-  it("keeps file context separate from image tags", () => {
+  it("is byte-identical to buildPrompt when no images are attached", () => {
     const file = makeExplicitChip("/a.ts", "src/a.ts");
-    const img = makeImageChip("/img.png", 1, "image/png");
-    const out = buildPromptWithImages("compare", [file, img], imageDeps);
-    expect(out.text).toBe(
-      `${CONTEXT_TAG_OPEN}\nAttached file: src/a.ts\n${CONTEXT_TAG_CLOSE}\n\n[Image #1] compare`,
-    );
-    expect(out.images).toHaveLength(1);
+    const out = buildPromptWithImages("do it", [file], [], deps);
+    expect(out.text).toBe(buildPrompt("do it", [file], deps));
+    expect(out.blocks).toEqual([{ type: "text", text: out.text }]);
   });
 
-  it("lists multiple images on separate lines when there is no trailing text", () => {
-    const a = makeImageChip("/a.png", 1, "image/png");
-    const b = makeImageChip("/b.png", 2, "image/jpeg");
-    const out = buildPromptWithImages("", [a, b], {
-      ...imageDeps,
-      readFileBinary: () => Buffer.from("x"),
-    });
-    expect(out.text).toBe("[Image #1]\n[Image #2]");
-    expect(out.images).toHaveLength(2);
+  it("keeps user text first and puts tags on trailing lines", () => {
+    const img = makeImageChip("/staging/img.png", 1, "image/png");
+    const out = buildPromptWithImages(
+      "what is this?",
+      [img],
+      [{ index: 1, mimeType: "image/png", data: b64 }],
+      deps,
+    );
+    expect(out.text).toBe("what is this?\n\n[Image #1]");
+    expect(out.blocks).toEqual([
+      { type: "text", text: "what is this?\n\n[Image #1]" },
+      { type: "image", mimeType: "image/png", data: b64 },
+    ]);
+  });
+
+  it("keeps a slash command at position 0 of the text block", () => {
+    const img = makeImageChip("/staging/img.png", 1, "image/png");
+    const out = buildPromptWithImages(
+      "/imagine make it watercolor",
+      [img],
+      [{ index: 1, mimeType: "image/png", data: b64 }],
+      deps,
+    );
+    expect(out.text.startsWith("/imagine")).toBe(true);
+  });
+
+  it("carries the origin workspace path in the tag for disk imports", () => {
+    const img = makeImageChip("/staging/img.png", 2, "image/png", "assets/hero.png");
+    const out = buildPromptWithImages(
+      "compress this",
+      [img],
+      [{ index: 2, mimeType: "image/png", data: b64, relPath: "assets/hero.png" }],
+      deps,
+    );
+    expect(out.text).toBe("compress this\n\n[Image #2] (assets/hero.png)");
+  });
+
+  it("keeps file context separate and ahead of text + tags", () => {
+    const file = makeExplicitChip("/a.ts", "src/a.ts");
+    const img = makeImageChip("/staging/img.png", 1, "image/png");
+    const out = buildPromptWithImages(
+      "compare",
+      [file, img],
+      [{ index: 1, mimeType: "image/png", data: b64 }],
+      deps,
+    );
+    expect(out.text).toBe(
+      `${CONTEXT_TAG_OPEN}\nAttached file: src/a.ts\n${CONTEXT_TAG_CLOSE}\n\ncompare\n\n[Image #1]`,
+    );
+    expect(out.blocks).toHaveLength(2);
+  });
+
+  it("orders multiple images by index with one tag line each", () => {
+    const a = makeImageChip("/s/a.png", 3, "image/png");
+    const bChip = makeImageChip("/s/b.png", 1, "image/jpeg");
+    const out = buildPromptWithImages(
+      "",
+      [a, bChip],
+      [
+        { index: 3, mimeType: "image/png", data: "AAA" },
+        { index: 1, mimeType: "image/jpeg", data: "BBB" },
+      ],
+      deps,
+    );
+    expect(out.text).toBe("[Image #1]\n[Image #3]");
+    expect(out.blocks.map((blk) => (blk.type === "image" ? blk.data : "text"))).toEqual([
+      "text",
+      "BBB",
+      "AAA",
+    ]);
   });
 });
