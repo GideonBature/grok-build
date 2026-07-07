@@ -32,18 +32,20 @@ export const BODY = `
   </main>
   <footer class="composer">
     <button id="scroll-bottom-btn" class="scroll-bottom-btn"></button>
-    <div id="attachments"></div>
-    <div class="composer-input-wrap">
-      <div id="input-highlight"></div>
-      <textarea id="input"></textarea>
+    <div class="composer-card">
+      <div id="attachments"></div>
+      <div class="composer-input-wrap">
+        <div id="input-highlight"></div>
+        <textarea id="input"></textarea>
+        <button id="mic-btn"></button>
+      </div>
+      <button id="add-btn"></button>
+      <button id="gear-btn"></button>
+      <div id="donut"><svg><circle id="donut-arc"/></svg><span id="donut-label"></span></div>
+      <div id="chips"></div>
+      <button id="mode-btn"></button>
+      <button id="send-btn"></button>
     </div>
-    <button id="mic-btn"></button>
-    <button id="add-btn"></button>
-    <button id="gear-btn"></button>
-    <div id="donut"><svg><circle id="donut-arc"/></svg><span id="donut-label"></span></div>
-    <div id="chips"></div>
-    <button id="mode-btn"></button>
-    <button id="send-btn"></button>
     <div id="mode-popover" hidden></div>
     <div id="gear-popover" hidden></div>
     <div id="add-popover" hidden></div>

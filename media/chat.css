@@ -6,6 +6,23 @@
 
 * { box-sizing: border-box; }
 
+/* Explicit scrollbar styling for every scroller (messages, textarea, popovers).
+   Left unstyled, the webview renders the platform's native bars — on Windows 11
+   that's Fluent scrollbars with ARROW BUTTONS, which put a stray ▼ at the
+   bottom-right of the messages area, floating above the composer. Styling
+   ::-webkit-scrollbar opts into the custom path where unstyled parts (the
+   buttons) don't render; the button rule is belt-and-braces. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground); }
+::-webkit-scrollbar-thumb:active { background: var(--vscode-scrollbarSlider-activeBackground); }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-corner { background: transparent; }
+
 html, body {
   height: 100%;
   margin: 0;
@@ -790,13 +807,28 @@ body.thinking-hidden .msg.thinking { display: none; }
 
 /* ---- composer ---- */
 
+/* No border-top separator: the card's own border is the boundary between the
+   messages scroll area and the input (mirrors Claude Code / Cursor composers —
+   a full-width rule above the card read as a dead strip). */
 .composer {
-  border-top: 1px solid var(--vscode-editorWidget-border);
   padding: var(--pad);
   display: flex;
   flex-direction: column;
-  gap: 6px;
   position: relative;
+}
+
+/* One unified card owns the border, fill, and focus ring for the whole input
+   area — attachments row, textarea, and the bottom toolbar live INSIDE it, so
+   they read as one control instead of three stacked strips. */
+.composer-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: var(--radius);
+}
+.composer-card:focus-within {
+  border-color: var(--vscode-focusBorder);
 }
 
 /* Floating "Scroll to bottom" (#28). Anchored to the composer (the chat input
@@ -805,8 +837,8 @@ body.thinking-hidden .msg.thinking { display: none; }
    pointer events) until the user scrolls away from the bottom. */
 .scroll-bottom-btn {
   position: absolute;
-  /* Sit above the composer's top border by the same gap the border sits above
-     the textarea (the composer's top padding, --pad) — symmetric spacing. */
+  /* Sit above the composer's top edge by the same gap the card sits inside the
+     composer (its top padding, --pad) — symmetric spacing. */
   bottom: calc(100% + var(--pad));
   left: 50%;
   transform: translate(-50%, 4px);
@@ -841,15 +873,11 @@ body.thinking-hidden .msg.thinking { display: none; }
    voice commands (e.g. "grok send"). Textareas can't style their own text, so
    the backdrop renders a mirrored copy with the command wrapped in an accent
    pill; the textarea sits on top with a transparent background so the pill shows
-   through behind the matching words. The wrap owns the border + fill. */
+   through behind the matching words. Border + fill + focus ring belong to the
+   enclosing .composer-card; the wrap stays position:relative because the mic
+   button and the highlight backdrop anchor to the textarea's box. */
 .composer-input-wrap {
   position: relative;
-  background: var(--vscode-input-background);
-  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
-  border-radius: var(--radius);
-}
-.composer-input-wrap:focus-within {
-  border-color: var(--vscode-focusBorder);
 }
 /* Shared text-box metrics — MUST match between the textarea and the backdrop so
    the highlight aligns exactly. */
@@ -983,6 +1011,8 @@ textarea#input {
   justify-content: space-between;
   gap: 4px;
   min-height: 28px;
+  /* Bottom row inside .composer-card — inset from the card edges. */
+  padding: 0 5px 5px;
 }
 .toolbar-left {
   display: flex;
@@ -1205,14 +1235,15 @@ textarea#input {
   background: transparent;
 }
 
-/* Uploaded attachments live on their own line at the top of the composer (an
-   extra row that grows the input area), separate from the active-editor chip
-   that stays in the toolbar. Each carries a remove (×) — not a hide toggle. */
+/* Uploaded attachments live on their own row at the top of the composer card
+   (above the textarea), separate from the active-editor chip that stays in the
+   toolbar. Each carries a remove (×) — not a hide toggle. Horizontal inset
+   matches the textarea's 8px text padding so chips align with the input text. */
 .attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 1px;
+  padding: 8px 8px 0;
 }
 .attachments:empty { display: none; }
 .attachment {
