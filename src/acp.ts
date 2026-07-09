@@ -236,7 +236,11 @@ export class AcpClient extends EventEmitter {
     this.emit("session", res);
 
     if (modelId && modelId !== this.currentModelId) {
-      await this.setModel(modelId);
+      try {
+        await this.setModel(modelId);
+      } catch (err) {
+        this.opts.log(`[acp] Failed to set model to ${modelId}: ${(err as Error).message}. Falling back to default model ${this.currentModelId}.`);
+      }
     }
     return { sessionId: res.sessionId };
   }
@@ -261,7 +265,11 @@ export class AcpClient extends EventEmitter {
     this.emit("session", { sessionId, ...(res ?? {}) });
     this.emit("sessionLoaded", { sessionId });
     if (modelId && modelId !== this.currentModelId) {
-      await this.setModel(modelId);
+      try {
+        await this.setModel(modelId);
+      } catch (err) {
+        this.opts.log(`[acp] Failed to set model to ${modelId}: ${(err as Error).message}. Keeping ${this.currentModelId}.`);
+      }
     }
     return { sessionId };
   }
