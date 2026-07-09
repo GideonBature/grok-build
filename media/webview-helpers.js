@@ -301,11 +301,15 @@
   // Parse the `[Image #N]` tags that buildPromptWithImages (src/prompt-builder.ts)
   // puts in the prompt text back out of a replayed body, so restore re-renders
   // image chips instead of raw tags. Must stay in sync with that format.
-  // Current wire shape: one tag per TRAILING line, `[Image #N]` or
-  // `[Image #N] (origin/rel/path.png)`. Legacy shapes from the first build are
-  // also stripped: LEADING tag lines, and a single leading inline `[Image #N] `
-  // prefix glued to the user's text. A tag-looking string in the MIDDLE of the
-  // body is the user's own words and is left alone. Returns
+  // Current wire shape: one tag per TRAILING line, whose parenthetical carries a
+  // do-not-Read hint — `[Image #N] (attached inline — …)` for pasted images,
+  // `[Image #N] (origin/rel/path.png — attached inline; …)` for disk imports
+  // (grok's CLI keeps its own copy of an inline image under the session's
+  // assets/ dir and surfaces that path to the model, which then Read-attempts
+  // the binary and fails — the hint stops that). Hint-less legacy shapes
+  // (`[Image #N]`, `[Image #N] (path)`, LEADING tag lines, a single leading
+  // inline `[Image #N] ` prefix) still parse. A tag-looking string in the
+  // MIDDLE of the body is the user's own words and is left alone. Returns
   // { body, images: [{index, path?}] } with images in tag order.
   function parseImageTags(body) {
     if (typeof body !== "string" || body.indexOf("[Image #") === -1) {
@@ -316,6 +320,15 @@
     // puts the close on the LAST `)`. A literal empty `()` no longer matches
     // (buildPromptWithImages never emits one), so that stays user text.
     const TAG_LINE = /^\[Image #(\d+)\](?: \((.+)\))?$/;
+    // Strip the do-not-Read hint from the captured parenthetical: a capture
+    // that IS the hint (pasted image) has no path; a `path — attached inline…`
+    // capture keeps only the path. No hint marker → legacy capture, kept whole.
+    const HINT = " — attached inline";
+    const pathFromTag = (raw) => {
+      if (!raw || raw.indexOf("attached inline") === 0) return undefined;
+      const cut = raw.indexOf(HINT);
+      return cut === -1 ? raw : raw.slice(0, cut);
+    };
     const lines = body.split("\n");
     const trailing = [];
     let end = lines.length;
@@ -324,7 +337,7 @@
       if (line === "" && trailing.length === 0) { end -= 1; continue; } // trailing blank lines
       const m = line.match(TAG_LINE);
       if (!m) break;
-      trailing.unshift({ index: Number(m[1]), path: m[2] || undefined });
+      trailing.unshift({ index: Number(m[1]), path: pathFromTag(m[2]) });
       end -= 1;
     }
     let start = 0;
@@ -332,7 +345,7 @@
     while (start < end) {
       const m = lines[start].trim().match(TAG_LINE);
       if (!m) break;
-      leading.push({ index: Number(m[1]), path: m[2] || undefined });
+      leading.push({ index: Number(m[1]), path: pathFromTag(m[2]) });
       start += 1;
     }
     let rest = lines.slice(start, end).join("\n").trim();

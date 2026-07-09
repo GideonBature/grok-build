@@ -38,13 +38,26 @@ Run it: `node research/vision-probe.cjs` (env: `PROBE_PNG_SIZE=<px>`,
 - **Wire text shape** (`buildPromptWithImages`):
   `<vscode-context envelope>\n\n<user text>\n\n<tag lines>` — the user's text
   keeps position 0 (a leading tag broke `/command` dispatch), one
-  `[Image #N]` tag per trailing line, with the origin workspace path appended
-  (`[Image #1] (assets/hero.png)`) for disk imports so grok can act on the
-  real file, not just the pixels. No images → byte-identical to `buildPrompt`.
+  `[Image #N]` tag per trailing line. Every tag's parenthetical carries a
+  **do-not-Read hint**:
+  `[Image #1] (attached inline — already visible to you; do not read it from disk)`
+  for pasted images, and
+  `[Image #2] (assets/hero.png — attached inline; act on the path if needed, but do not Read it)`
+  for disk imports (the origin path is kept so grok can act on the real file,
+  not just the pixels). The hint exists because of a Windows dogfood capture
+  (2026-07-09): the CLI persists an incoming image block to its own
+  `~/.grok/sessions/<…>/assets/image-<uuid>.png` and surfaces that path in the
+  model's context, so the model `Read`-attempted the binary — `Cannot read
+  binary file` — on a pasted image whose pixels it had *already* received (its
+  answer was unaffected; the failed read is pure transcript noise). The hint
+  suppresses that at the point of temptation instead of adding a global rule
+  to the plan-mode primer (primer additions have blast radius — see the v3→v4
+  history in CLAUDE.md). No images → byte-identical to `buildPrompt`.
   The restore side parses tags back out via `parseImageTags`
-  (media/webview-helpers.js) — leading/inline legacy shapes from the first
-  build are also stripped; a tag-looking string in the *middle* of the user's
-  words is left alone.
+  (media/webview-helpers.js), stripping the hint so restore sees a clean path
+  (or none) — hint-less legacy tags and leading/inline legacy shapes from the
+  first build are also stripped; a tag-looking string in the *middle* of the
+  user's words is left alone.
 - **`[Image #N]` numbering is session-scoped** (`Session.imageCounter`,
   re-seeded from replayed prompts on restore) so two screenshots in one
   conversation never share a tag.

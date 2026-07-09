@@ -138,6 +138,12 @@ describe("buildPrompt", () => {
 
 describe("buildPromptWithImages", () => {
   const b64 = Buffer.from("pngbytes").toString("base64");
+  // The do-not-Read hint every tag carries (grok otherwise chases the CLI's own
+  // assets/ copy of an inline image and fails on the binary).
+  const PASTE_TAG = (n: number) =>
+    `[Image #${n}] (attached inline — already visible to you; do not read it from disk)`;
+  const PATH_TAG = (n: number, p: string) =>
+    `[Image #${n}] (${p} — attached inline; act on the path if needed, but do not Read it)`;
 
   it("is byte-identical to buildPrompt when no images are attached", () => {
     const file = makeExplicitChip("/a.ts", "src/a.ts");
@@ -163,7 +169,7 @@ describe("buildPromptWithImages", () => {
     expect(out.text).toBe(
       "/imagine make it watercolor\n\n" +
         `${CONTEXT_TAG_OPEN}\nAttached file: src/a.ts\n${CONTEXT_TAG_CLOSE}` +
-        "\n\n[Image #1]",
+        `\n\n${PASTE_TAG(1)}`,
     );
     expect(out.blocks[0]).toEqual({ type: "text", text: out.text });
     expect(out.blocks[1]).toEqual({ type: "image", mimeType: "image/png", data: b64 });
@@ -177,9 +183,9 @@ describe("buildPromptWithImages", () => {
       [{ index: 1, mimeType: "image/png", data: b64 }],
       deps,
     );
-    expect(out.text).toBe("what is this?\n\n[Image #1]");
+    expect(out.text).toBe(`what is this?\n\n${PASTE_TAG(1)}`);
     expect(out.blocks).toEqual([
-      { type: "text", text: "what is this?\n\n[Image #1]" },
+      { type: "text", text: `what is this?\n\n${PASTE_TAG(1)}` },
       { type: "image", mimeType: "image/png", data: b64 },
     ]);
   });
@@ -203,7 +209,7 @@ describe("buildPromptWithImages", () => {
       [{ index: 2, mimeType: "image/png", data: b64, relPath: "assets/hero.png" }],
       deps,
     );
-    expect(out.text).toBe("compress this\n\n[Image #2] (assets/hero.png)");
+    expect(out.text).toBe(`compress this\n\n${PATH_TAG(2, "assets/hero.png")}`);
   });
 
   it("keeps file context separate and ahead of text + tags", () => {
@@ -216,7 +222,7 @@ describe("buildPromptWithImages", () => {
       deps,
     );
     expect(out.text).toBe(
-      `${CONTEXT_TAG_OPEN}\nAttached file: src/a.ts\n${CONTEXT_TAG_CLOSE}\n\ncompare\n\n[Image #1]`,
+      `${CONTEXT_TAG_OPEN}\nAttached file: src/a.ts\n${CONTEXT_TAG_CLOSE}\n\ncompare\n\n${PASTE_TAG(1)}`,
     );
     expect(out.blocks).toHaveLength(2);
   });
@@ -233,7 +239,7 @@ describe("buildPromptWithImages", () => {
       ],
       deps,
     );
-    expect(out.text).toBe("[Image #1]\n[Image #3]");
+    expect(out.text).toBe(`${PASTE_TAG(1)}\n${PASTE_TAG(3)}`);
     expect(out.blocks.map((blk) => (blk.type === "image" ? blk.data : "text"))).toEqual([
       "text",
       "BBB",

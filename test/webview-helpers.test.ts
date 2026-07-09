@@ -297,6 +297,20 @@ describe("parseImageTags", () => {
     expect(out.images).toEqual([{ index: 2, path: "assets/hero.png" }]);
   });
 
+  it("strips the do-not-Read hint from a pasted-image tag (current wire)", () => {
+    const out = parseImageTags(
+      "what is this?\n\n[Image #1] (attached inline — already visible to you; do not read it from disk)",
+    );
+    expect(out).toEqual({ body: "what is this?", images: [{ index: 1, path: undefined }] });
+  });
+
+  it("strips the do-not-Read hint but keeps the path on a disk-import tag (current wire)", () => {
+    const out = parseImageTags(
+      "compress this\n\n[Image #2] (assets/hero.png — attached inline; act on the path if needed, but do not Read it)",
+    );
+    expect(out).toEqual({ body: "compress this", images: [{ index: 2, path: "assets/hero.png" }] });
+  });
+
   it("round-trips a disk-import tag whose filename contains parentheses", () => {
     // Browser-download dedup names — `screenshot (1).png` — put a `)` inside
     // the path; the tag's close paren must resolve to the LAST one on the line.

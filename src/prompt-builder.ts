@@ -15,7 +15,8 @@ export interface PromptImageInput {
   /** base64 payload */
   data: string;
   /** Workspace-relative origin path for images imported from disk — carried in
-   *  the tag (`[Image #N] (assets/x.png)`) so grok keeps the file's identity. */
+   *  the tag (`[Image #N] (assets/x.png — attached inline; …)`) so grok keeps
+   *  the file's identity. */
   relPath?: string;
 }
 
@@ -129,6 +130,12 @@ export function buildPrompt(
  *   position 0 and break CLI slash dispatch), and each tag sits on its own
  *   trailing line, carrying the origin workspace path when there is one so
  *   grok can act on the real file, not just the pixels.
+ * - Every tag's parenthetical carries a do-not-Read hint: the CLI keeps its
+ *   own copy of an inline image under the session's `assets/` dir and surfaces
+ *   that path to the model, which then tries `Read` on the binary and fails —
+ *   a noisy no-op on every pasted image (observed in Windows dogfooding,
+ *   2026-07-09). The hint kills the temptation at the point of use instead of
+ *   burdening the global primer; see research/vision-input.md.
  * - Confirmed slash commands (`slashCommand: true`) flip the envelope too:
  *   `<text>\n\n<envelope>\n\n<tags>` — the same position-0 rule the tag
  *   placement already honors also applies to the envelope itself (that was
@@ -153,7 +160,10 @@ export function buildPromptWithImages(
   }
   const sorted = [...images].sort((a, b) => a.index - b.index);
   const tagLines = sorted
-    .map((im) => (im.relPath ? `[Image #${im.index}] (${im.relPath})` : `[Image #${im.index}]`))
+    .map((im) =>
+      im.relPath
+        ? `[Image #${im.index}] (${im.relPath} — attached inline; act on the path if needed, but do not Read it)`
+        : `[Image #${im.index}] (attached inline — already visible to you; do not read it from disk)`)
     .join("\n");
   const filePrompt = buildPrompt("", fileChips, deps);
   const ordered = slashCommand ? [text, filePrompt, tagLines] : [filePrompt, text, tagLines];
