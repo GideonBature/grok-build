@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.30 — 2026-07-09
+
+### Fixed
+
+- **The sign-in (and sign-out) terminal commands actually run now.** The onboarding button typed `"C:\…\grok.exe" /login` into the terminal — the wrong command (`login` is the CLI subcommand; `/login` only works inside the interactive TUI) *and* a PowerShell parser error (a quoted path followed by arguments needs the `&` call operator). Sign-in and sign-out now launch the grok binary directly as the terminal's own process, which behaves the same on PowerShell, cmd, and POSIX shells. README examples updated to `grok login` too. ([media/chat.js](media/chat.js), [src/sidebar.ts](src/sidebar.ts), [README.md](README.md))
+
+### Changed
+
+- The API-key option in the sign-in onboarding no longer claims extra models — it now just says "pay per token". ([media/chat.js](media/chat.js))
+
 ## 1.4.29 — 2026-07-05
 
 ### Fixed

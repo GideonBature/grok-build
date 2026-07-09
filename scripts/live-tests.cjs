@@ -339,9 +339,18 @@ async function testEditDiffRestore() {
 async function testPlanMode() {
   const cwd = mkTmp("plan");
   fs.writeFileSync(path.join(cwd, "app.js"), "function add(a,b){return a+b}\nmodule.exports={add}\n");
-  // In plan mode we must NOT let grok mutate the workspace, so refuse in-workspace
-  // writes (ack without writing) — exactly the choke point the extension gates.
-  const acp = new Acp(cwd, { onWrite: () => "ack" });
+  // Mirror the extension's plan gate exactly: refuse (ack without writing) only
+  // IN-WORKSPACE writes; perform writes outside the workspace for real. grok
+  // ≥0.2.91 keeps plan-mode state files (plan.md + a state JSON) in its session
+  // dir and READS ITS OWN WRITES BACK mid-turn — a blanket ack-without-write
+  // makes those edits never stick, and grok spins retrying until the timeout.
+  const acp = new Acp(cwd, {
+    onWrite: (p) => {
+      const rel = path.relative(cwd, p);
+      const inWorkspace = rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+      return inWorkspace ? "ack" : "write";
+    },
+  });
   try {
     await withTimeout(acp.send("initialize", INIT), 30000, "init");
     const ns = await withTimeout(acp.send("session/new", { cwd, mcpServers: [] }), 30000, "new");
@@ -349,9 +358,13 @@ async function testPlanMode() {
     const sessionId = ns.result.sessionId;
     const sm = await withTimeout(acp.send("session/set_mode", { sessionId, modeId: "plan" }), 30000, "set_mode");
     assert(!sm.error, "set_mode plan errored: " + JSON.stringify(sm.error));
+    // grok ≥0.2.91's plan flow is much longer even when healthy (~4 min: reads
+    // its plan-mode docs, maintains session-dir state files, may delegate to a
+    // planning subagent), so give it 6 min — a probe-measured healthy turn took
+    // ~235s end-to-end.
     await withTimeout(
       acp.send("session/prompt", { sessionId, prompt: [{ type: "text", text: "Plan how to add a subtract(a,b) function to app.js and a test for it. Produce a detailed plan; do not implement yet." }] }),
-      150000, "plan prompt");
+      360000, "plan prompt");
 
     // The real client-side gate: with plan mode active, an in-workspace write is
     // blocked, while grok's own ~/.grok/sessions/.../plan.md write is allowed.

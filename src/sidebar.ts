@@ -877,8 +877,9 @@ See design doc for the full state machine diagram.`;
     // fresh, unstarted session.
     await this.disposePool();
     this.focused = new Session();
-    const term = vscode.window.createTerminal("Grok Logout");
-    term.sendText(`"${cliPath}" logout`);
+    // shellPath/shellArgs, not sendText — a quoted path typed into PowerShell
+    // is a parser error (see runMcpList).
+    vscode.window.createTerminal({ name: "Grok Logout", shellPath: cliPath, shellArgs: ["logout"] });
     this.post({ type: "clearMessages" });
     this.post({ type: "onboarding", state: "auth-required" });
   }
@@ -1862,9 +1863,10 @@ See design doc for the full state machine diagram.`;
           this.post({ type: "onboarding", state: "missing-cli" });
           break;
         }
-        const term = vscode.window.createTerminal("Grok Login");
+        // shellPath/shellArgs, not sendText — a quoted path typed into
+        // PowerShell is a parser error (see runMcpList).
+        const term = vscode.window.createTerminal({ name: "Grok Login", shellPath: cliPath, shellArgs: ["login"] });
         term.show();
-        term.sendText(`"${cliPath}" /login`);
         break;
       }
       case "recheckConnection":
