@@ -1,5 +1,6 @@
 node_modules/
 out/
+out-integration/
 *.vsix
 !releases/*.vsix
 .vscode-test/

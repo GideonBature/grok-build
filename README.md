@@ -26,7 +26,7 @@ A short tour of how the extension is wired (and the one place it's deliberately 
 
 ## Requirements
 
-- **VS Code** 1.90+ (or a compatible editor — Cursor, Windsurf, VSCodium).
+- **VS Code** 1.94+ (or a compatible editor — Cursor, Windsurf, VSCodium).
 - **The Grok Build CLI** (`grok`) on macOS, Linux, or Windows. The CLI ships a native Windows build, so the extension runs natively on all three — no WSL required (WSL2 + Remote-WSL still works if you prefer it).
 - **A login:** either a **SuperGrok or X Premium+** subscription (`grok login`) or an xAI API key. Either subscription unlocks **Grok Build**; with an API key you also get the **grok-4.x** models and **grok-imagine**. (Grok's free tier does **not** include the CLI agent.)
 - **For voice control only** (optional): [`ffmpeg`](https://ffmpeg.org) on `PATH`, and a *separate* xAI API key for Speech-to-Text (pay-as-you-go, ~$0.10/hr — your CLI login does **not** cover it). See **Voice control** under [Features & capabilities](#features--capabilities).
@@ -282,6 +282,7 @@ VS Code commands (not Grok slash commands):
 |---|---|
 | `Grok: Open` | Open the Grok sidebar |
 | `Grok: New Session` | Start a fresh session |
+| `Grok: Compact Conversation` | Compact the current session to reclaim context |
 | `Grok: Pick Model` | Open the model picker |
 | `Grok: Toggle Plan / Agent Mode` | Open the mode picker (Agent / Plan / Auto accept) |
 | `Grok: Send File` | Add the selected file to context |

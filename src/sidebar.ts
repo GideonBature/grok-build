@@ -50,11 +50,13 @@ import {
 } from "./chips";
 import { buildPromptWithImages, type PromptImageInput } from "./prompt-builder";
 import { matchSlashCommand } from "./slash-filter";
+import { configForcesAlwaysApprove } from "./grok-config";
 import { parseFileRef, shouldReadFileInline } from "./file-ref";
 import { pickRejectOption, shouldRejectPermission } from "./plan-gate";
 import { appendPlanEntry, decideRestoreState } from "./plan-restore";
 import { planReviewFileBaseName, sanitizePlanReviewFilePart } from "./plan-review";
 import { GROK_PRIMER, isPrimerText } from "./grok-primer";
+import { HostMsg, WebviewMsg } from "./protocol";
 import {
   SessionListEntry,
   SessionMetaOverrides,
@@ -70,46 +72,9 @@ import {
   sessionsDirFor,
 } from "./sessions";
 
-type WebviewMsg =
-  | { type: "ready" }
-  | { type: "send"; text: string; chips?: FileChip[]; bare?: boolean }
-  | { type: "newSession" }
-  | { type: "cancel" }
-  | { type: "pickModel" }
-  | { type: "setMode"; modeId: "agent" | "plan" | "yolo" }
-  | { type: "removeChip"; id: string }
-  | { type: "toggleChip"; id: string }
-  | { type: "openFile"; path: string }
-  | { type: "openUrl"; url: string }
-  | { type: "openDiff"; path: string; oldText: string; newText: string; requestId?: number | string }
-  | { type: "exportExpr"; action: string; kind: string; current?: string; svg?: string; png?: string; svgDark?: string; svgLight?: string }
-  | { type: "setEffort"; level: string }
-  | { type: "openGlobalConfig" }
-  | { type: "openProjectConfig" }
-  | { type: "runMcpList" }
-  | { type: "showLogs" }
-  | { type: "setShowThinking"; value: boolean }
-  | { type: "dropFile"; path: string; shift: boolean }
-  | { type: "permissionAnswer"; requestId: number | string; optionId: string }
-  | { type: "exitPlanAnswer"; requestId: number | string; verdict: "approved" | "abandoned" | "rejected"; comment?: string }
-  | { type: "questionAnswer"; requestId: number | string; answers?: Record<string, string>; annotations?: Record<string, { notes?: string; preview?: string }> }
-  | { type: "questionCancel"; requestId: number | string }
-  | { type: "setModel"; modelId: string }
-  | { type: "runInstallCmd" }
-  | { type: "runGrokLogin" }
-  | { type: "logout" }
-  | { type: "checkGrokUpdate" }
-  | { type: "updateGrok" }
-  | { type: "recheckConnection" }
-  | { type: "listSessions"; offset?: number; limit?: number; query?: string }
-  | { type: "resumeSession"; id: string }
-  | { type: "renameSession"; id: string; name: string }
-  | { type: "deleteSession"; id: string; name?: string }
-  | { type: "clearAllSessions" }
-  | { type: "pickFile" }
-  | { type: "pasteImage"; mimeType: string; data: string }
-  | { type: "voiceStart" }
-  | { type: "voiceStop" };
+// HostMsg (host -> webview) and WebviewMsg (webview -> host) both live in
+// src/protocol.ts now — the single source of truth for the message contract,
+// imported above. See that file for why.
 
 const SESSION_META_KEY = "grok.sessionMeta";
 /** globalState key for the anonymous per-install telemetry GUID (survives updates). */
@@ -459,6 +424,51 @@ See design doc for the full state machine diagram.`;
 
   private postMode(): void {
     this.post({ type: "modeChanged", modeId: this.displayMode() });
+  }
+
+  /** Whether grok's config.toml forces always-approve (#31). Project
+   *  `.grok/config.toml` overrides global `~/.grok/config.toml`. Read fresh on
+   *  each session start — it's a couple of small file reads, and the user may
+   *  edit the config between sessions. Any read error → false (treat as normal). */
+  private configForcesAutoApprove(): boolean {
+    const readSafe = (p?: string): string | undefined => {
+      if (!p) return undefined;
+      try {
+        return fs.readFileSync(p, "utf8");
+      } catch {
+        return undefined;
+      }
+    };
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    const globalPath = home ? path.join(home, ".grok", "config.toml") : undefined;
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const projectPath = cwd ? path.join(cwd, ".grok", "config.toml") : undefined;
+    return configForcesAlwaysApprove({ project: readSafe(projectPath), global: readSafe(globalPath) });
+  }
+
+  private alwaysApproveNoticeShown = false;
+
+  /** Tell the user once per activation that always-approve is set globally, so
+   *  the "Auto accept" mode they see isn't a per-session choice they can undo
+   *  from the extension (the CLI reads the global config). */
+  private noticeAlwaysApproveOnce(): void {
+    if (this.alwaysApproveNoticeShown) return;
+    this.alwaysApproveNoticeShown = true;
+    const OPEN = "Open config.toml";
+    void vscode.window
+      .showInformationMessage(
+        'Grok: "always-approve" is set in your grok config.toml, so tool actions are auto-approved for every session (CLI and extension). The mode shows "Auto accept" to reflect this — the extension can\'t override a global config setting per-session.',
+        OPEN,
+      )
+      .then((pick) => {
+        if (pick !== OPEN) return;
+        const home = process.env.HOME || process.env.USERPROFILE || "";
+        if (!home) return;
+        void vscode.commands.executeCommand(
+          "vscode.open",
+          vscode.Uri.file(path.join(home, ".grok", "config.toml")),
+        );
+      });
   }
 
   /** Toggle the client-enforced plan gate and keep the live client in sync. Only
@@ -1271,7 +1281,13 @@ See design doc for the full state machine diagram.`;
       vscode.workspace.getConfiguration("grok").get<string>("defaultMode", ""),
       !!resumeId,
     );
-    session.autoApprove = rememberedYolo;
+    // grok's own `permission_mode = "always-approve"` (config.toml, set via
+    // Shift+Tab or `/always-approve`) auto-approves every session server-side
+    // and is invisible over ACP — the CLI still reports plain agent mode. Detect
+    // it so the button shows "Auto accept" instead of a misleading "Agent" (#31).
+    // Applies to resumed sessions too (the config is global, not per-session).
+    const configAutoApprove = this.configForcesAutoApprove();
+    session.autoApprove = rememberedYolo || configAutoApprove;
     session.planActive = false;
     session.afterTurn = undefined;
     session.hasHistory = false;
@@ -1287,7 +1303,8 @@ See design doc for the full state machine diagram.`;
     session.titleGenerated = false;
     session.firstUserMessageForTitle = undefined;
     session.priming = true;
-    this.emit(session, { type: "modeChanged", modeId: rememberedYolo ? "yolo" : "agent" });
+    this.emit(session, { type: "modeChanged", modeId: session.autoApprove ? "yolo" : "agent" });
+    if (configAutoApprove) this.noticeAlwaysApproveOnce();
     if (resumeId) this.emit(session, { type: "clearMessages" });
 
     // Lock the composer (spinner, disabled) for the session-start window —
@@ -3060,7 +3077,7 @@ See design doc for the full state machine diagram.`;
     "messageChunk", "userMessageChunk", "thoughtChunk", "toolCall", "toolCallUpdate", "xaiNotification",
   ]);
 
-  private post(message: any): void {
+  private post(message: HostMsg): void {
     if (this.focused.suppressContent && GrokSidebar.SUPPRESS_TYPES.has(message.type)) return;
     if (this.focused.suppressPlanReject && GrokSidebar.PLAN_REJECT_SUPPRESS.has(message.type)) return;
     this.view?.webview.postMessage(message);
@@ -3077,7 +3094,7 @@ See design doc for the full state machine diagram.`;
    * the webview until they're focused. (Pool-of-1 today: session is always the
    * focused one, so this is behaviorally identical to `post`.)
    */
-  private emit(session: Session, message: any): void {
+  private emit(session: Session, message: HostMsg): void {
     if (session.suppressContent && GrokSidebar.SUPPRESS_TYPES.has(message.type)) return;
     if (session.suppressPlanReject && GrokSidebar.PLAN_REJECT_SUPPRESS.has(message.type)) return;
     if (message.type === "clearMessages") session.buffer = [];

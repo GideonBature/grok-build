@@ -310,7 +310,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, parseAttachmentContext, parseSelectionBlocks, parseImageTags } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -3898,6 +3898,17 @@
         if (msg.dot && msg.dot !== "none") state.dots[msg.id] = msg.dot;
         else delete state.dots[msg.id];
         if (!historyPopover.hidden) patchSessionDot(msg.id);
+        break;
+      default:
+        // No case ran. Either the host posted a type outside the contract (drift
+        // between src/protocol.ts and the webview-helpers.js copy — the sync test
+        // is meant to catch this at CI, this is the runtime backstop) or a known
+        // type is missing its handler. Warn rather than silently swallow it.
+        console.warn(
+          isKnownHostMessage(msg.type)
+            ? "[grok] host message has no handler (missing switch case): " + msg.type
+            : "[grok] unknown host message type (contract drift): " + msg.type,
+        );
         break;
     }
     // After any step grok takes mid-turn, make sure the chat still shows it's

@@ -1,4 +1,5 @@
 import { AcpClient } from "./acp";
+import type { HostMsg } from "./protocol";
 
 /** Live state for the dashboard dot. `cold` (no live process) is represented by
  *  the absence of a Session, so it isn't in this union. */
@@ -154,5 +155,5 @@ export class Session {
    * buffers here, so re-focusing replays the buffer (clearMessages + replay)
    * to reconstruct the view losslessly — no grok reload, no process kill.
    */
-  buffer: unknown[] = [];
+  buffer: HostMsg[] = [];
 }

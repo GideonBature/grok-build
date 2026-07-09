@@ -4,6 +4,20 @@ export interface SlashCmd {
 }
 
 /**
+ * Slash commands the extension hides from both the autocomplete list and the
+ * dispatch gate (#31). `/always-approve` only mutates grok's *global*
+ * config.toml — a surprising, sticky side effect that then silences permission
+ * cards in every grok session — and is a no-op over ACP anyway, so advertising
+ * it is pure confusion. Filtered at ingestion (see `filterAdvertisedCommands`).
+ */
+export const HIDDEN_SLASH_COMMANDS: ReadonlySet<string> = new Set(["always-approve"]);
+
+/** Drop hidden commands from an advertised `available_commands_update` list. */
+export function filterAdvertisedCommands<T extends { name: string }>(commands: T[]): T[] {
+  return commands.filter((c) => !HIDDEN_SLASH_COMMANDS.has(c.name));
+}
+
+/**
  * Given the current composer text and cursor position, return the slash-command query
  * (the chars after `/` on the line that the caret is in) or `null` if no popover is active.
  *

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { applySlashPick, filterCommands, getSlashQuery, matchSlashCommand } from "../src/slash-filter";
+import {
+  applySlashPick,
+  filterAdvertisedCommands,
+  filterCommands,
+  getSlashQuery,
+  HIDDEN_SLASH_COMMANDS,
+  matchSlashCommand,
+} from "../src/slash-filter";
 
 describe("getSlashQuery", () => {
   it("returns null when no slash at line start", () => {
@@ -72,6 +79,34 @@ describe("applySlashPick", () => {
     const r = applySlashPick("hi\n/pla", 7, "plan");
     expect(r.text).toBe("hi\n/plan ");
     expect(r.caret).toBe(9);
+  });
+});
+
+describe("filterAdvertisedCommands", () => {
+  it("drops /always-approve from the advertised list (#31)", () => {
+    const cmds = [
+      { name: "compact", description: "Compress conversation" },
+      { name: "always-approve", description: "Auto-approve everything" },
+      { name: "context", description: "Show context" },
+    ];
+    expect(filterAdvertisedCommands(cmds).map((c) => c.name)).toEqual(["compact", "context"]);
+  });
+
+  it("leaves a list without hidden commands untouched", () => {
+    const cmds = [{ name: "compact" }, { name: "context" }];
+    expect(filterAdvertisedCommands(cmds)).toEqual(cmds);
+  });
+
+  it("HIDDEN_SLASH_COMMANDS contains always-approve", () => {
+    expect(HIDDEN_SLASH_COMMANDS.has("always-approve")).toBe(true);
+  });
+
+  it("keeps the resulting list out of the dispatch gate too", () => {
+    const cmds = [{ name: "compact" }, { name: "always-approve" }];
+    const names = filterAdvertisedCommands(cmds).map((c) => c.name);
+    // Filtered out → matchSlashCommand won't recognize it as a command.
+    expect(matchSlashCommand("/always-approve", names)).toBeNull();
+    expect(matchSlashCommand("/compact", names)).toBe("compact");
   });
 });
 

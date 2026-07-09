@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.1 — 2026-07-09
+
+### Fixed
+
+- **The mode button tells the truth when `always-approve` is set in `config.toml`.** grok's global `permission_mode = "always-approve"` (set via Shift+Tab or `/always-approve` in the TUI) auto-approves every session server-side and is invisible over ACP, so the extension used to show a misleading "Agent mode" with no permission cards. It now detects the setting (project `.grok/config.toml` overriding global `~/.grok/config.toml`) and shows **Auto accept**, plus a one-time notice that it's a global config setting. (#31) ([src/grok-config.ts](src/grok-config.ts), [src/sidebar.ts](src/sidebar.ts))
+
+### Changed
+
+- **Hidden the `/always-approve` slash command.** It only mutates grok's global `config.toml` — a sticky, surprising side effect — and is a no-op over ACP, so it no longer appears in autocomplete or dispatches. (#31) ([src/slash-filter.ts](src/slash-filter.ts), [src/acp.ts](src/acp.ts))
+- **Typed the host↔webview message contract.** The host→webview direction was `any`; it's now a discriminated union in `src/protocol.ts` (single source of truth), with the webview keeping a synced mirror and a test asserting both sides agree — so "post one shape, handle another" drift (restore/pagination/media) is a build error. Caught two latent mismatches on the way in. ([src/protocol.ts](src/protocol.ts), [media/webview-helpers.js](media/webview-helpers.js))
+- **Strengthened the test & release gates.** The `release.*` scripts now run `test:live` by default (`-SkipLive`/`--skip-live` to opt out); the real-grok plan-mode test now models the true approve/reject flows with a disk-snapshot containment canary (the old single-turn test invented an impossible state); the live suite gained a capability-drift probe and a fast `--smoke` lane; and a required `@vscode/test-electron` activation smoke now runs in CI (`npm run test:integration`, validated against a real Extension Host).
+- **Documentation consistency pass:** corrected the minimum VS Code version in the README, documented the `Grok: Compact Conversation` command, added the telemetry/mode-prefs/grok-config modules to the architecture map, and trimmed change-history narrative out of `CLAUDE.md` (it points at the changelog and `research/*` instead).
+
 ## 1.5.0 — 2026-07-09
 
 ### Added

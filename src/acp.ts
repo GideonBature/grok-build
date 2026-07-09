@@ -25,6 +25,7 @@ import {
   shouldBlockWrite,
 } from "./plan-gate";
 import { resolveGrokHome } from "./sessions";
+import { filterAdvertisedCommands } from "./slash-filter";
 
 export type EffortLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -485,8 +486,10 @@ export class AcpClient extends EventEmitter {
       return;
     }
     if (r.event === "commandsUpdate") {
-      this.availableCommands = r.commands;
-      this.emit("commandsUpdate", r.commands);
+      // Hide config-mutating no-op commands (`/always-approve`) from both the
+      // autocomplete and the dispatch gate at the single ingestion point (#31).
+      this.availableCommands = filterAdvertisedCommands(r.commands);
+      this.emit("commandsUpdate", this.availableCommands);
       return;
     }
     if (r.event === "taskBackgrounded") { this.emit("taskBackgrounded", r.payload); return; }

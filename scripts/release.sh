@@ -5,8 +5,9 @@
 #
 # Bump package.json + write the changelog section FIRST (those stay
 # user-initiated), then run:
-#   ./scripts/release.sh                 # full release
-#   ./scripts/release.sh --no-test       # skip tsc + npm test
+#   ./scripts/release.sh                 # full release (incl. real-grok test:live)
+#   ./scripts/release.sh --no-test       # skip ALL gating (tsc + npm test + test:live)
+#   ./scripts/release.sh --skip-live     # keep tsc + npm test, skip only real-grok test:live
 #   ./scripts/release.sh --dry-run       # print what it would do
 #   ./scripts/release.sh -F .git/MSG     # commit with a message file
 #
@@ -18,10 +19,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-NO_TEST=0; DRY_RUN=0; MSG=""; MSG_FILE=""
+NO_TEST=0; SKIP_LIVE=0; DRY_RUN=0; MSG=""; MSG_FILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-test) NO_TEST=1 ;;
+    --skip-live) SKIP_LIVE=1 ;;
     --dry-run) DRY_RUN=1 ;;
     -m|--message) MSG="$2"; shift ;;
     -F|--message-file) MSG_FILE="$2"; shift ;;
@@ -44,6 +46,15 @@ branch="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$NO_TEST" -eq 0 ]; then
   step "tsc --noEmit"; npx tsc -p . --noEmit
   step "npm test";     npm test
+  # The real-grok suite is a mandatory part of the release gate (CLAUDE.md § Publishing).
+  # It spawns the actual CLI, so it only runs where grok is logged in — hence --skip-live,
+  # but the DEFAULT runs it so it can't be silently forgotten under release pressure. A live
+  # FAIL aborts (set -e); an in-suite SKIP (no subscription / grok declined) is exit 0.
+  if [ "$SKIP_LIVE" -eq 0 ]; then
+    step "npm run test:live (real grok)"; npm run test:live
+  else
+    step "SKIPPING real-grok tests (--skip-live) - gate is WEAKER; run 'npm run test:live' by hand first"
+  fi
 fi
 
 if git tag --list "$tag" | grep -q .; then

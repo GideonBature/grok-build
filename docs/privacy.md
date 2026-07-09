@@ -12,7 +12,7 @@ The event carries:
 |---|---|---|
 | Anonymous **install id** | a random GUID generated once on your machine | count distinct installs — **not** your account, email, or grok login |
 | **mode / model / effort** | `agent` / `grok-build` / `high` | which features are used |
-| **OS** + extension **version** | `Windows` / `1.4.25` | platform/version split |
+| **OS** + extension **version** | `Windows` / `1.5.1` | platform/version split |
 | **Country** | derived by Aptabase from your IP | rough geography |
 
 Country is the only thing derived from your IP, and the **IP itself is discarded — never stored**.

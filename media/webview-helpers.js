@@ -8,6 +8,40 @@
     "vue","svelte","astro","sql","prisma","graphql","gql",
   ]);
 
+  // The host <-> webview message contract. These MUST stay in sync with the TS
+  // discriminated unions in src/protocol.ts (which is the source of truth) — the
+  // webview is plain JS and can't import the compiled types, so it carries its own
+  // copy and test/protocol.test.ts asserts the two are set-equal in both
+  // directions (and that chat.js actually handles every host type).
+  const HOST_MESSAGE_TYPES = [
+    "initialState", "showThinking", "fontScale", "grokUpdateStatus", "initialized",
+    "cliUpdating", "session", "modelChanged", "modeChanged", "openModePopover",
+    "voiceState", "voiceConfigured", "voicePartial", "voiceSubmit", "voiceTranscript",
+    "voiceError", "chips", "commandsUpdate", "userMessage", "agentStart", "thoughtChunk",
+    "messageChunk", "media", "userMessageChunk", "historyReplay", "permissionHistoryQueue",
+    "planHistoryQueue", "planProcessing", "toolCall", "toolCallUpdate", "permissionRequest",
+    "permissionResolved", "exitPlanRequest", "questionRequest", "planNotice", "planBlocked",
+    "promptComplete", "agentReset", "agentError", "agentEnd", "exit", "setBusy", "summarizing",
+    "sessionContext", "clearMessages", "onboarding", "error", "xaiNotification", "sessions",
+    "sessionDot",
+  ];
+  const WEBVIEW_MESSAGE_TYPES = [
+    "ready", "send", "newSession", "cancel", "pickModel", "setMode", "removeChip",
+    "toggleChip", "openFile", "openUrl", "openDiff", "exportExpr", "setEffort",
+    "openGlobalConfig", "openProjectConfig", "runMcpList", "showLogs", "setShowThinking",
+    "dropFile", "permissionAnswer", "exitPlanAnswer", "questionAnswer", "questionCancel",
+    "setModel", "runInstallCmd", "runGrokLogin", "logout", "checkGrokUpdate", "updateGrok",
+    "recheckConnection", "listSessions", "resumeSession", "renameSession", "deleteSession",
+    "clearAllSessions", "pickFile", "pasteImage", "voiceStart", "voiceStop",
+  ];
+  const HOST_MESSAGE_TYPE_SET = new Set(HOST_MESSAGE_TYPES);
+  /** True when `type` is a host->webview message the contract knows about. A
+   *  false here means the host posted a type this webview build can't handle —
+   *  drift the sync test is designed to prevent, warned at runtime as a backstop. */
+  function isKnownHostMessage(type) {
+    return HOST_MESSAGE_TYPE_SET.has(type);
+  }
+
   function looksLikeFileRef(s) {
     if (!s || s.length > 200) return false;
     const core = s.replace(/[:#].*$/, "");
@@ -359,7 +393,7 @@
     return { body: rest.trim(), images: [...leading, ...trailing] };
   }
 
-  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, parseAttachmentContext, parseSelectionBlocks, parseImageTags };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, parseAttachmentContext, parseSelectionBlocks, parseImageTags };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

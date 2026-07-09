@@ -6,6 +6,10 @@ mcps/**
 research/**
 test/**
 src/**
+integration/**
+out-integration/**
+.vscode-test.mjs
+.vscode-test/**
 tsconfig.json
 node_modules/**
 !node_modules/ws/**

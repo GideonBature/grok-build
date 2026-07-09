@@ -2,7 +2,7 @@
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build for VS Code (Community)",
   "description": "VS Code client for xAI's Grok Build CLI — review edits in a diff before approving, @-mention files, resumable history, inline image/video, and voice. Requires the Grok Build CLI plus a SuperGrok or X Premium+ subscription (or an xAI API key). MIT, open-source. Not affiliated with or endorsed by xAI.",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
@@ -156,7 +156,11 @@
         },
         "grok.defaultMode": {
           "type": "string",
-          "enum": ["", "agent", "yolo"],
+          "enum": [
+            "",
+            "agent",
+            "yolo"
+          ],
           "enumDescriptions": [
             "Agent mode (CLI default)",
             "Agent mode",
@@ -250,6 +254,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:perf": "vitest run --config vitest.perf.config.ts",
+    "compile:integration": "tsc -p integration/tsconfig.json",
+    "test:integration": "npm run compile && npm run compile:integration && vscode-test",
     "test:live": "tsc -p . && node scripts/live-tests.cjs",
     "telemetry:probe": "tsc -p . && node scripts/telemetry-probe.cjs",
     "prepackage": "node -e \"for (const f of require('fs').readdirSync('.')) if (f.endsWith('.vsix')) require('fs').unlinkSync(f)\"",
@@ -257,9 +263,12 @@
     "publish": "npx @vscode/vsce publish"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.94.0",
     "@types/ws": "^8.18.1",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.5.2",
     "happy-dom": "^20.9.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
