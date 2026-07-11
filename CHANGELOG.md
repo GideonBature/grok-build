@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.4 — 2026-07-11
+
+### Changed
+
+- **One pending message instead of a queue.** Composing more text while a message is already queued now **appends** to the single pending block (blank-line separated — exactly how it sends), rather than stacking separate queue entries. Edit pulls the whole pending text back into the composer, Remove drops it, Stop still hands it back — no more edited messages landing at the end of a queue that was going to collapse into one message anyway. (#37 follow-up) ([media/chat.js](media/chat.js), [src/sidebar.ts](src/sidebar.ts))
+
 ## 1.5.3 — 2026-07-11
 
 ### Fixed

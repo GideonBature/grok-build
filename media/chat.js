@@ -3499,12 +3499,16 @@
     vscode.postMessage({ type: "queueSend", text });
   }
 
-  // One pending user block per queued message, pinned to the end of the
-  // conversation — italic + dashed border + clock tag reads "not sent yet" —
-  // with per-message Edit (back to the composer) and Remove actions.
+  // THE pending user block (the host keeps at most one queued message —
+  // composing more appends to it), pinned to the end of the conversation.
+  // Italic + dashed border + clock tag reads "not sent yet"; Edit pulls the
+  // whole pending text back to the composer, Remove drops it.
   function renderQueuedBlocks() {
     let wrap = state.queuedWrapEl;
-    if (!state.sendQueue.length) {
+    // Defensive join: the host's invariant is a single entry, but render
+    // whatever arrives the way the flush would send it.
+    const text = state.sendQueue.join("\n\n");
+    if (!text) {
       if (wrap) wrap.remove();
       state.queuedWrapEl = null;
       return;
@@ -3515,47 +3519,45 @@
       state.queuedWrapEl = wrap;
     }
     wrap.innerHTML = "";
-    state.sendQueue.forEach((text, i) => {
-      const msg = document.createElement("div");
-      msg.className = "msg user queued";
-      const bubble = document.createElement("div");
-      bubble.className = "msg-bubble";
-      const hdr = document.createElement("div");
-      hdr.className = "queued-hdr";
-      const tag = document.createElement("span");
-      tag.className = "queued-tag";
-      tag.innerHTML = `${ICON.clock}<span>Queued</span>`;
-      tag.title = "Sends when Grok finishes";
-      const actions = document.createElement("span");
-      actions.className = "queued-actions";
-      const editBtn = document.createElement("button");
-      editBtn.className = "queued-action";
-      editBtn.title = "Edit — back to the composer";
-      editBtn.innerHTML = ICON.pencil;
-      editBtn.onclick = () => {
-        vscode.postMessage({ type: "dequeueSend", index: i });
-        input.value = input.value.trim() ? text + "\n\n" + input.value : text;
-        renderInputHighlight();
-        input.focus();
-      };
-      const rmBtn = document.createElement("button");
-      rmBtn.className = "queued-action";
-      rmBtn.title = "Remove from queue";
-      rmBtn.innerHTML = ICON.x;
-      rmBtn.onclick = () => vscode.postMessage({ type: "dequeueSend", index: i });
-      actions.appendChild(editBtn);
-      actions.appendChild(rmBtn);
-      hdr.appendChild(tag);
-      hdr.appendChild(actions);
-      const body = document.createElement("div");
-      body.className = "queued-text";
-      body.textContent = text;
-      body.title = text; // body is line-clamped; full text on hover
-      bubble.appendChild(hdr);
-      bubble.appendChild(body);
-      msg.appendChild(bubble);
-      wrap.appendChild(msg);
-    });
+    const msg = document.createElement("div");
+    msg.className = "msg user queued";
+    const bubble = document.createElement("div");
+    bubble.className = "msg-bubble";
+    const hdr = document.createElement("div");
+    hdr.className = "queued-hdr";
+    const tag = document.createElement("span");
+    tag.className = "queued-tag";
+    tag.innerHTML = `${ICON.clock}<span>Queued</span>`;
+    tag.title = "Sends when Grok finishes";
+    const actions = document.createElement("span");
+    actions.className = "queued-actions";
+    const editBtn = document.createElement("button");
+    editBtn.className = "queued-action";
+    editBtn.title = "Edit — back to the composer";
+    editBtn.innerHTML = ICON.pencil;
+    editBtn.onclick = () => {
+      vscode.postMessage({ type: "dequeueSend", index: 0 });
+      input.value = input.value.trim() ? text + "\n\n" + input.value : text;
+      renderInputHighlight();
+      input.focus();
+    };
+    const rmBtn = document.createElement("button");
+    rmBtn.className = "queued-action";
+    rmBtn.title = "Remove from queue";
+    rmBtn.innerHTML = ICON.x;
+    rmBtn.onclick = () => vscode.postMessage({ type: "dequeueSend", index: 0 });
+    actions.appendChild(editBtn);
+    actions.appendChild(rmBtn);
+    hdr.appendChild(tag);
+    hdr.appendChild(actions);
+    const body = document.createElement("div");
+    body.className = "queued-text";
+    body.textContent = text;
+    body.title = text; // body is line-clamped; full text on hover
+    bubble.appendChild(hdr);
+    bubble.appendChild(body);
+    msg.appendChild(bubble);
+    wrap.appendChild(msg);
     messagesEl.appendChild(wrap); // (re)pin to the end of the conversation
     scrollToBottom();
   }

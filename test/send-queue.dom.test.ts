@@ -165,49 +165,50 @@ describe("Enter while busy queues instead of cancelling (#37)", () => {
 });
 
 describe("queued blocks — host-owned per session (#37)", () => {
-  it("renders one pending user block per queued message, full text on hover, and clears on an empty snapshot", () => {
+  it("renders ONE pending block (the host keeps a single appended message), full text on hover, cleared on an empty snapshot", () => {
     const { window, doc } = bootWebview();
     dispatch(window, { type: "setBusy", value: true });
 
-    seedQueue(window, ["first message", "second message"]);
-    expect(queuedBlocks(doc)).toEqual(["first message", "second message"]);
-    const bodies = [...doc.querySelectorAll(".msg.queued .queued-text")] as HTMLElement[];
-    expect(bodies[0].title).toBe("first message"); // clamped body → full text in tooltip
+    // The host appends follow-ups into the single entry (blank-line separated —
+    // the exact flush format), so the block previews what will actually send.
+    seedQueue(window, ["first message\n\nsecond message"]);
+    expect(queuedBlocks(doc)).toEqual(["first message\n\nsecond message"]);
+    expect(doc.querySelectorAll(".msg.queued").length).toBe(1); // never separate entries
+    const body = doc.querySelector(".msg.queued .queued-text") as HTMLElement;
+    expect(body.title).toBe("first message\n\nsecond message"); // clamped body → full text in tooltip
 
     seedQueue(window, []); // host flushed (or cleared) the queue
     expect(queuedBlocks(doc)).toEqual([]);
   });
 
-  it("Edit hands the message back to the composer (before any draft) and asks the host to dequeue it", () => {
+  it("Edit hands the WHOLE pending message back to the composer (before any draft) and dequeues it", () => {
     const { window, posted, doc } = bootWebview();
     const input = $(doc, "input") as HTMLTextAreaElement;
     dispatch(window, { type: "setBusy", value: true });
-    seedQueue(window, ["fix the test", "other"]);
+    seedQueue(window, ["fix the test\n\nand rerun"]);
 
     input.value = "half-typed draft";
     const editBtn = doc.querySelector('.queued-action[title^="Edit"]') as HTMLElement;
     click(window, editBtn);
 
-    const dq = posted.find((p) => p.type === "dequeueSend");
-    expect(dq?.index).toBe(0);
+    expect((posted.find((p) => p.type === "dequeueSend"))?.index).toBe(0);
     // Queued text is older than the current draft → it goes first.
-    expect(input.value).toBe("fix the test\n\nhalf-typed draft");
+    expect(input.value).toBe("fix the test\n\nand rerun\n\nhalf-typed draft");
 
     // Host confirms the removal with a fresh snapshot.
-    seedQueue(window, ["other"]);
-    expect(queuedBlocks(doc)).toEqual(["other"]);
+    seedQueue(window, []);
+    expect(queuedBlocks(doc)).toEqual([]);
   });
 
-  it("Remove asks the host to dequeue that message only", () => {
+  it("Remove drops the pending message", () => {
     const { window, posted, doc } = bootWebview();
     dispatch(window, { type: "setBusy", value: true });
-    seedQueue(window, ["keep me", "drop me"]);
+    seedQueue(window, ["drop me"]);
 
-    const removeBtns = [...doc.querySelectorAll('.queued-action[title="Remove from queue"]')];
-    click(window, removeBtns[1] as Element);
+    const removeBtn = doc.querySelector('.queued-action[title="Remove from queue"]') as HTMLElement;
+    click(window, removeBtn);
 
-    expect((posted.find((p) => p.type === "dequeueSend"))?.index).toBe(1);
-    expect(types(posted)).not.toContain("clearQueuedSends"); // one message, not the whole queue
+    expect((posted.find((p) => p.type === "dequeueSend"))?.index).toBe(0);
   });
 
   it("clicking Stop with messages queued hands them back to the composer and clears the host queue BEFORE cancelling", () => {
@@ -215,7 +216,7 @@ describe("queued blocks — host-owned per session (#37)", () => {
     const input = $(doc, "input") as HTMLTextAreaElement;
     const sendBtn = $(doc, "send-btn");
     dispatch(window, { type: "setBusy", value: true });
-    seedQueue(window, ["continue", "and also this"]);
+    seedQueue(window, ["continue\n\nand also this"]); // host keeps ONE appended entry
     expect(sendBtn.classList.contains("stop")).toBe(true); // composer is empty → Stop face
 
     click(window, sendBtn); // halt

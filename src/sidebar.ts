@@ -1792,10 +1792,15 @@ See design doc for the full state machine diagram.`;
       case "queueSend": {
         // Host-owned per-session queue (#37): the webview renders a mirror from
         // the queuedSends snapshots, so queued messages survive focus switches
-        // and flush even while their session is backgrounded.
+        // and flush even while their session is backgrounded. A SINGLE pending
+        // message is kept — composing more while one is queued APPENDS to it
+        // (blank-line separator, the exact flush format). Separate entries were
+        // a fiction: Stop and the flush both collapse them anyway, and per-entry
+        // editing broke ordering (an edited entry re-queued at the end).
         const s = this.focused;
         if (typeof msg.text === "string" && msg.text.trim()) {
-          s.queuedSends.push(msg.text);
+          if (s.queuedSends.length) s.queuedSends[0] += "\n\n" + msg.text;
+          else s.queuedSends.push(msg.text);
           this.emit(s, { type: "queuedSends", items: [...s.queuedSends] });
           // If the turn ended while this message was in flight, fire it now.
           void this.maybeFlushQueuedSends(s);
