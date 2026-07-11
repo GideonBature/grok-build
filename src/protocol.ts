@@ -100,7 +100,10 @@ export type HostMsg =
   | { type: "error"; text: string }
   | { type: "xaiNotification"; update?: unknown }
   | { type: "sessions"; entries: SessionListEntry[]; activeId?: string; dots: Record<string, Dot>; offset: number; total: number; hasMore: boolean; query: string }
-  | { type: "sessionDot"; id: string; dot: Dot };
+  | { type: "sessionDot"; id: string; dot: Dot }
+  // Full snapshot of the focused session's host-owned send queue (#37) — the
+  // webview renders pending user blocks from this; replay rebuilds them.
+  | { type: "queuedSends"; items: string[] };
 
 /** webview -> host */
 export type WebviewMsg =
@@ -143,7 +146,12 @@ export type WebviewMsg =
   | { type: "pickFile" }
   | { type: "pasteImage"; mimeType: string; data: string }
   | { type: "voiceStart" }
-  | { type: "voiceStop" };
+  | { type: "voiceStop" }
+  // Host-owned send queue mutations (#37): the webview never mutates its local
+  // mirror — it posts these and re-renders from the queuedSends snapshot.
+  | { type: "queueSend"; text: string }
+  | { type: "dequeueSend"; index: number }
+  | { type: "clearQueuedSends" };
 
 // Exhaustive maps: `Record<Union["type"], true>` forces every discriminant to be
 // a key (missing -> tsc error) and forbids any extra (excess-property -> tsc
@@ -162,7 +170,7 @@ const HOST_MESSAGE_TYPE_MAP: Record<HostMsg["type"], true> = {
   planNotice: true, planBlocked: true, promptComplete: true, agentReset: true,
   agentError: true, agentEnd: true, exit: true, setBusy: true, summarizing: true,
   sessionContext: true, clearMessages: true, onboarding: true, error: true,
-  xaiNotification: true, sessions: true, sessionDot: true,
+  xaiNotification: true, sessions: true, sessionDot: true, queuedSends: true,
 };
 
 const WEBVIEW_MESSAGE_TYPE_MAP: Record<WebviewMsg["type"], true> = {
@@ -176,7 +184,7 @@ const WEBVIEW_MESSAGE_TYPE_MAP: Record<WebviewMsg["type"], true> = {
   logout: true, checkGrokUpdate: true, updateGrok: true, recheckConnection: true,
   listSessions: true, resumeSession: true, renameSession: true, deleteSession: true,
   clearAllSessions: true, pickFile: true, pasteImage: true, voiceStart: true,
-  voiceStop: true,
+  voiceStop: true, queueSend: true, dequeueSend: true, clearQueuedSends: true,
 };
 
 export const HOST_MESSAGE_TYPES: readonly HostMsg["type"][] = Object.keys(HOST_MESSAGE_TYPE_MAP) as HostMsg["type"][];

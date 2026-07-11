@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.3 — 2026-07-11
+
+### Fixed
+
+- **Typing while Grok works no longer cancels its tools.** Enter (and the send button) doubled as a hidden Stop while a turn was running, so a mid-turn "continue" silently resolved in-flight tools as *"cancelled by the user"* — amplified by busy-state leaking across dashboard session switches. Typed text now **never cancels**: messages compose into a per-session queue shown as pending blocks at the end of the chat (italic, clock tag, per-message Edit/Remove), survive session switches, and auto-send as one combined message when that session's turn ends — even while backgrounded. Stop (square button, empty composer only) hands queued text back to the composer instead of firing it. Thanks @githubuser1256! (#37) ([media/chat.js](media/chat.js), [src/sidebar.ts](src/sidebar.ts), [src/session.ts](src/session.ts), [src/protocol.ts](src/protocol.ts))
+- **Enter during CJK IME composition no longer sends mid-composition.** The composer now respects `isComposing`/`keyCode 229`, so Enter confirms the IME candidate (Claude-Code-style: first Enter picks the character, second sends). Thanks @yyu0310! (#38) ([media/chat.js](media/chat.js))
+
+### Added
+
+- **Live-suite coverage for the Stop contract and concurrent sessions.** `cancel-mid-turn` pins that an id-less `session/cancel` settles the turn as cancelled and leaves the session usable; `parallel-sessions` pins that two CLI processes on one workspace answer overlapping prompts independently. ([scripts/live-tests.cjs](scripts/live-tests.cjs))
+
 ## 1.5.2 — 2026-07-10
 
 ### Added

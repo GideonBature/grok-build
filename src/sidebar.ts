@@ -772,6 +772,26 @@ See design doc for the full state machine diagram.`;
   }
 
   /**
+   * Fire the session's queued sends (#37) as ONE combined prompt — blank-line
+   * separated, so grok gets a single turn with full context — once its turn is
+   * truly over. Safe to call opportunistically: it no-ops while a turn is in
+   * flight (`working`), while a card awaits the user (`needs-you`), while a
+   * verdict follow-up is pending (`afterTurn`), during the spawn window
+   * (`priming` — no session id to prompt yet), or with no live client. Works
+   * for backgrounded sessions too: the flush emits into the session buffer
+   * like any other turn, so its bubbles are there when the user swaps back.
+   */
+  private async maybeFlushQueuedSends(session: Session): Promise<void> {
+    if (!session.queuedSends.length) return;
+    if (!session.client || session.priming || session.afterTurn) return;
+    if (session.status === "working" || session.status === "needs-you") return;
+    const combined = session.queuedSends.join("\n\n");
+    session.queuedSends = [];
+    this.emit(session, { type: "queuedSends", items: [] });
+    await this.handleSend(combined, false, session);
+  }
+
+  /**
    * Forward generated media (grok's `/imagine` image or `/imagine-video` video)
    * to the webview. Remote URLs pass through as a link. File paths — how grok
    * writes media into its session dir — are served via `asWebviewUri` when they
@@ -1577,6 +1597,11 @@ See design doc for the full state machine diagram.`;
     client.on("exit", (code) => {
       if (gen !== session.gen) return; // suppress exit events from disposed/replaced clients
       this.emit(session, { type: "exit", code });
+      // The process is dead — anything queued for it can never send.
+      if (session.queuedSends.length) {
+        session.queuedSends = [];
+        this.emit(session, { type: "queuedSends", items: [] });
+      }
       this.setStatus(session, "error");
       this.pool.delete(session); // the process is gone; it's no longer a live pool member
     });
@@ -1695,7 +1720,11 @@ See design doc for the full state machine diagram.`;
       this.touch(session);
       this.reapPool(); // enforce the LRU cap now that the pool grew
       this.emit(session, { type: "setBusy", value: false });
-      void this.ensurePrimed(client, session, gen);
+      // After the eager primer acks, fire anything type-ahead-queued during the
+      // startup window (#37). ensurePrimed never throws.
+      void this.ensurePrimed(client, session, gen).then(() => {
+        if (gen === session.gen) void this.maybeFlushQueuedSends(session);
+      });
     } catch (err) {
       if (gen !== session.gen) { client.dispose(); return undefined; }
       const msg = (err as any).message ?? String(err);
@@ -1760,6 +1789,37 @@ See design doc for the full state machine diagram.`;
       case "cancel":
         await this.focused.client?.cancel();
         break;
+      case "queueSend": {
+        // Host-owned per-session queue (#37): the webview renders a mirror from
+        // the queuedSends snapshots, so queued messages survive focus switches
+        // and flush even while their session is backgrounded.
+        const s = this.focused;
+        if (typeof msg.text === "string" && msg.text.trim()) {
+          s.queuedSends.push(msg.text);
+          this.emit(s, { type: "queuedSends", items: [...s.queuedSends] });
+          // If the turn ended while this message was in flight, fire it now.
+          void this.maybeFlushQueuedSends(s);
+        }
+        break;
+      }
+      case "dequeueSend": {
+        const s = this.focused;
+        if (Number.isInteger(msg.index) && msg.index >= 0 && msg.index < s.queuedSends.length) {
+          s.queuedSends.splice(msg.index, 1);
+          this.emit(s, { type: "queuedSends", items: [...s.queuedSends] });
+        }
+        break;
+      }
+      case "clearQueuedSends": {
+        // Posted by the webview's Stop flow BEFORE the cancel — a halt must not
+        // auto-fire queued sends into the cancelled turn's wake.
+        const s = this.focused;
+        if (s.queuedSends.length) {
+          s.queuedSends = [];
+          this.emit(s, { type: "queuedSends", items: [] });
+        }
+        break;
+      }
       case "pickModel":
         await this.pickModel();
         break;
@@ -2875,10 +2935,13 @@ See design doc for the full state machine diagram.`;
     this.postChips();
   }
 
-  private async handleSend(text: string, bare = false): Promise<void> {
-    const client = await this.ensureClient();
+  private async handleSend(text: string, bare = false, target?: Session): Promise<void> {
+    // `target` lets a queued-send flush fire into a BACKGROUNDED session (its
+    // turn ended while another was focused). Only the focused session may spawn
+    // a client on demand; a background target without one has nothing to talk to.
+    const session = target ?? this.focused;
+    const client = session.client ?? (session === this.focused ? await this.ensureClient() : undefined);
     if (!client) return;
-    const session = this.focused;
     const gen = session.gen;
 
     // An attachment posted before send has started staging (message ordering),
@@ -2894,8 +2957,9 @@ See design doc for the full state machine diagram.`;
 
     // Snapshot the HOST's chips — the webview copy is a render mirror of these
     // (every mutation routes through us + postChips).
-    // `bare` sends (gear-menu /compact) deliberately carry no attachments.
-    const chips = bare ? [] : [...this.chips];
+    // `bare` sends (gear-menu /compact) deliberately carry no attachments, and
+    // a background flush must not consume the FOCUSED view's composer chips.
+    const chips = bare || session !== this.focused ? [] : [...this.chips];
 
     // Pre-read every visible image BEFORE anything is cleared or sent. Any
     // failure blocks the whole send with the chips intact — never a prompt
@@ -2948,8 +3012,8 @@ See design doc for the full state machine diagram.`;
       slashCommand != null,
     );
 
-    if (bare) {
-      this.postChips();
+    if (bare || session !== this.focused) {
+      if (bare) this.postChips();
     } else {
       // One-shot attachments are consumed by the send; the implicit context
       // chip mirrors IDE state and stays resident (like Claude Code's). Keep
@@ -3033,6 +3097,10 @@ See design doc for the full state machine diagram.`;
       // deferred until now (a new prompt can't overlap the one above).
       try { await this.runAfterTurn(session); }
       finally { session.suppressPlanReject = false; } // safety net for plan-reject suppression
+      // The turn (incl. any verdict follow-up) is fully over — fire anything
+      // queued during it (#37). No-ops when the queue is empty or the session
+      // was torn down mid-turn.
+      if (gen === session.gen) void this.maybeFlushQueuedSends(session);
     }
   }
 

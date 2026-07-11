@@ -324,6 +324,59 @@ code {
   word-wrap: break-word;
   position: relative;
 }
+/* Queued sends (#37): pending user blocks pinned to the end of the chat —
+   italic + dashed border + clock tag = "composed, not sent yet". Combined into
+   one prompt by the host when the session's turn ends. */
+.queued-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.msg.user.queued .msg-bubble {
+  background: transparent;
+  border: 1px dashed var(--vscode-editorWidget-border, var(--vscode-input-border, #555));
+  opacity: 0.9;
+}
+.queued-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.queued-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+.queued-tag svg { width: 12px; height: 12px; display: block; }
+.queued-actions { display: inline-flex; gap: 2px; }
+.queued-action {
+  background: transparent;
+  border: none;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+.queued-action:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+  color: var(--vscode-foreground);
+}
+.queued-text {
+  font-style: italic;
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .msg.agent {
   background: transparent;
   padding-left: 0;

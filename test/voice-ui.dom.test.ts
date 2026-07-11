@@ -119,19 +119,21 @@ describe("voice control mic button", () => {
     expect((mic as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("stops listening and drops the queue when the host resets voice (session switch)", () => {
+  it("stops listening when the host resets voice; a busy dictation went to the HOST queue, not a send", () => {
     const { window, posted, doc } = bootWebview();
     const mic = $(doc, "mic-btn");
     click(window, mic);
     dispatch(window, { type: "voiceState", status: "listening" });
     dispatch(window, { type: "setBusy", value: true });
-    dispatch(window, { type: "voiceSubmit", text: "queued" }); // sits in the queue
+    dispatch(window, { type: "voiceSubmit", text: "queued" }); // routed to the host-owned queue
 
     dispatch(window, { type: "voiceState", status: "idle" });   // host stops voice on session switch
     expect(mic.classList.contains("listening")).toBe(false);
     expect(mic.classList.contains("connecting")).toBe(false);
 
-    // the queued message must NOT be sent into the new session
+    // The webview never fires sends at turn end — the HOST owns the queue and
+    // flushes it in the session the message belongs to.
+    expect((posted.find((p) => p.type === "queueSend") as Posted)?.text).toBe("queued");
     dispatch(window, { type: "agentEnd" });
     expect(posted.some((p) => p.type === "send")).toBe(false);
   });
@@ -218,43 +220,33 @@ describe("voice control: continuous listening + queue (hands-free)", () => {
     expect(mic.classList.contains("listening")).toBe(true);   // mic stays on — no click needed
   });
 
-  it("queues a voiceSubmit while Grok is busy, then flushes it when the turn ends", () => {
+  it("routes a voiceSubmit to the HOST queue while Grok is busy — never a direct send", () => {
     const { window, posted, doc } = bootWebview();
     const mic = $(doc, "mic-btn");
     click(window, mic);
     dispatch(window, { type: "setBusy", value: true });       // Grok is responding
     dispatch(window, { type: "voiceSubmit", text: "second message" });
 
-    expect(posted.some((p) => p.type === "send")).toBe(false); // not sent yet — queued
+    expect(posted.some((p) => p.type === "send")).toBe(false); // not sent — queued host-side
+    expect((posted.find((p) => p.type === "queueSend") as Posted)?.text).toBe("second message");
 
-    dispatch(window, { type: "agentEnd" });                    // Grok finishes its turn
-    const sent = posted.find((p) => p.type === "send");
-    expect((sent as Posted)?.text).toBe("second message");     // queued message flushed automatically
-  });
-
-  it("does not strand a queued message when the turn ends in an error", () => {
-    const { window, posted, doc } = bootWebview();
-    click(window, $(doc, "mic-btn"));
-    dispatch(window, { type: "setBusy", value: true });
-    dispatch(window, { type: "voiceSubmit", text: "queued during error turn" });
+    dispatch(window, { type: "agentEnd" });                    // the HOST flushes, not the webview
     expect(posted.some((p) => p.type === "send")).toBe(false);
-
-    dispatch(window, { type: "agentError", text: "boom" });
-    expect((posted.find((p) => p.type === "send") as Posted)?.text).toBe("queued during error turn");
   });
 
-  it("drops the queue if the Grok process exits", () => {
-    const { window, posted, doc } = bootWebview();
+  it("clears the queued blocks when the host empties the queue on process exit", () => {
+    const { window, doc } = bootWebview();
     click(window, $(doc, "mic-btn"));
     dispatch(window, { type: "setBusy", value: true });
-    dispatch(window, { type: "voiceSubmit", text: "stale" });
+    dispatch(window, { type: "queuedSends", items: ["stale"] }); // host snapshot → block renders
+    expect(doc.querySelectorAll(".msg.queued").length).toBe(1);
 
-    dispatch(window, { type: "exit", code: 1 });        // session dies
-    dispatch(window, { type: "agentEnd" });             // a later turn ends
-    expect(posted.some((p) => p.type === "send")).toBe(false); // nothing flushed
+    dispatch(window, { type: "exit", code: 1 });                 // session dies…
+    dispatch(window, { type: "queuedSends", items: [] });        // …host clears its queue
+    expect(doc.querySelectorAll(".msg.queued").length).toBe(0);
   });
 
-  it("queues multiple messages dictated during one response and sends them in order", () => {
+  it("posts each message dictated during one response to the host queue, in order", () => {
     const { window, posted, doc } = bootWebview();
     const mic = $(doc, "mic-btn");
     click(window, mic);
@@ -262,10 +254,9 @@ describe("voice control: continuous listening + queue (hands-free)", () => {
     dispatch(window, { type: "voiceSubmit", text: "msg one" });
     dispatch(window, { type: "voiceSubmit", text: "msg two" });
 
-    dispatch(window, { type: "agentEnd" });  // first flush
-    expect(posted.filter((p) => p.type === "send").map((p) => (p as Posted).text)).toEqual(["msg one"]);
-    dispatch(window, { type: "agentEnd" });  // next flush
-    expect(posted.filter((p) => p.type === "send").map((p) => (p as Posted).text)).toEqual(["msg one", "msg two"]);
+    expect(posted.filter((p) => p.type === "queueSend").map((p) => (p as Posted).text))
+      .toEqual(["msg one", "msg two"]);
+    expect(posted.some((p) => p.type === "send")).toBe(false); // combining + flushing is the host's job
   });
 });
 

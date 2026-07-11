@@ -156,4 +156,14 @@ export class Session {
    * to reconstruct the view losslessly — no grok reload, no process kill.
    */
   buffer: HostMsg[] = [];
+
+  /**
+   * Messages composed while THIS session was busy (typed Enter-sends and
+   * dictated utterances), awaiting its turn end. Host-owned per session — the
+   * webview renders a mirror (pending user blocks) from `queuedSends`
+   * snapshots, so the queue survives focus switches and the flush fires even
+   * while the session is backgrounded. Flushed as ONE combined prompt
+   * (blank-line separated) by maybeFlushQueuedSends.
+   */
+  queuedSends: string[] = [];
 }

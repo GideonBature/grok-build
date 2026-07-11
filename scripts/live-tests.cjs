@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
  * On-demand LIVE pre-release smoke suite — spawns the REAL `grok agent stdio`
- * binary and exercises the surfaces our 368 grok-free unit tests can't:
- * the actual ACP handshake, a prompt round-trip, session restore, plan-mode
- * enforcement, and the v1.4.0 features (image + video generation, subagents).
+ * binary and exercises the surfaces the grok-free unit tests can't:
+ * the actual ACP handshake, a prompt round-trip, a mid-turn session/cancel
+ * (the Stop-button contract, #37), two concurrent sessions on one workspace
+ * (the Agent Dashboard pool), session restore, plan-mode enforcement, and the
+ * v1.4.0 features (image + video generation, subagents).
  *
  * Why this is NOT part of `npm test`:
  *   - CI has no `grok` binary, no login, and no SuperGrok subscription
@@ -200,6 +202,11 @@ class Acp {
     this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     return new Promise((res) => this.waiters.set(id, res));
   }
+  // Id-less notification — session/cancel MUST go out this way (the extension's
+  // AcpClient.cancel() does the same; grok ignores it when sent as a request).
+  notify(method, params) {
+    this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+  }
   _respond(id, result) { this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n"); }
 
   agentText() {
@@ -215,6 +222,16 @@ const INIT = { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: tru
 function mkTmp(tag) { return fs.mkdtempSync(path.join(os.tmpdir(), "grok-live-" + tag + "-")); }
 function withTimeout(promise, ms, label) {
   return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms: ${label}`)), ms))]);
+}
+/** Poll `cond` every 50ms until truthy; throws after `ms`. For "mid-turn" timing
+ *  (e.g. cancel once the stream starts flowing). */
+async function waitFor(cond, ms, label) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (cond()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timeout after ${ms}ms waiting for: ${label}`);
 }
 class Skip extends Error {}        // throw to mark a test SKIPPED (not failed)
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
@@ -287,6 +304,89 @@ async function testPrompt() {
     const liveEchoes = acp.updates.filter((u) => u.sessionUpdate === "user_message_chunk").length;
     return `stopReason=${pr.result && pr.result.stopReason}, replied ${text.trim().length} chars${pong ? " (contains PONG)" : ""}, live-echo×${liveEchoes}`;
   } finally { acp.kill(); }
+}
+
+// The Stop button contract (#37). The extension cancels a turn by sending
+// session/cancel as an id-less notification mid-stream; the CLI must (a) settle
+// the in-flight session/prompt with a cancelled stopReason — not hang it, not
+// error it, not kill the process — and (b) keep the session usable for the next
+// prompt (the extension keeps the same process after Stop). #37 showed how much
+// rides on cancel semantics: an unexpected cancel resolves running tools as
+// "cancelled by the user", so a drift here changes user-visible behavior.
+async function testCancelMidTurn() {
+  const cwd = mkTmp("cancel");
+  const acp = new Acp(cwd);
+  try {
+    let r = await withTimeout(acp.send("initialize", INIT), 30000, "init");
+    assert(!r.error, "init errored");
+    r = await withTimeout(acp.send("session/new", { cwd, mcpServers: [] }), 30000, "session/new");
+    assert(!r.error && r.result && r.result.sessionId, "session/new failed: " + JSON.stringify(r.error));
+    const sessionId = r.result.sessionId;
+
+    // A long generation, cancelled the moment the stream starts flowing.
+    const pending = acp.send("session/prompt", {
+      sessionId,
+      prompt: [{ type: "text", text: "Write a detailed 1500-word essay on the history of version control systems. No tools, no files — just prose." }],
+    });
+    await waitFor(
+      () => acp.updates.some((u) => u.sessionUpdate === "agent_message_chunk" || u.sessionUpdate === "agent_thought_chunk"),
+      90000, "first streamed chunk before cancel",
+    );
+    acp.notify("session/cancel", { sessionId });
+
+    const res = await withTimeout(pending, 30000, "prompt settlement after session/cancel");
+    const stop = res.result && res.result.stopReason;
+    assert(/cancell?ed/i.test(String(stop)), `expected a cancelled stopReason, got ${JSON.stringify(res.result || res.error)}`);
+    assert(acp.exitCode == null, `grok exited (code ${acp.exitCode}) after cancel`);
+
+    // Same process, same session: the next prompt must work.
+    const chunksAtCancel = acp.updates.length;
+    const pr2 = await withTimeout(
+      acp.send("session/prompt", { sessionId, prompt: [{ type: "text", text: "Reply with exactly one word: ALIVE. No tools." }] }),
+      120000, "post-cancel prompt");
+    assert(!pr2.error, "post-cancel prompt errored: " + JSON.stringify(pr2.error));
+    const after = acp.updates.slice(chunksAtCancel)
+      .filter((u) => u.sessionUpdate === "agent_message_chunk" && u.content && u.content.type === "text")
+      .map((u) => u.content.text).join("");
+    assert(/alive/i.test(after), "post-cancel prompt got no ALIVE reply — session unusable after cancel");
+    return `stopReason=${stop}, session survived and answered the next prompt`;
+  } finally { acp.kill(); }
+}
+
+// The Agent Dashboard runs a pool of live sessions — one `grok agent stdio`
+// process each, same workspace (#37's reporter ran several concurrently). Two
+// processes serving overlapping prompts must complete independently: no
+// cross-talk, no contention on the shared ~/.grok session store.
+async function testParallelSessions() {
+  const cwd = mkTmp("pool");
+  const a = new Acp(cwd);
+  const b = new Acp(cwd);
+  try {
+    const [ia, ib] = await Promise.all([
+      withTimeout(a.send("initialize", INIT), 30000, "init A"),
+      withTimeout(b.send("initialize", INIT), 30000, "init B"),
+    ]);
+    assert(!ia.error && !ib.error, "initialize errored");
+    const [na, nb] = await Promise.all([
+      withTimeout(a.send("session/new", { cwd, mcpServers: [] }), 30000, "session/new A"),
+      withTimeout(b.send("session/new", { cwd, mcpServers: [] }), 30000, "session/new B"),
+    ]);
+    assert(na.result && na.result.sessionId, "session/new A failed: " + JSON.stringify(na.error));
+    assert(nb.result && nb.result.sessionId, "session/new B failed: " + JSON.stringify(nb.error));
+    assert(na.result.sessionId !== nb.result.sessionId, "both processes returned the same session id");
+
+    const [pa, pb] = await Promise.all([
+      withTimeout(a.send("session/prompt", { sessionId: na.result.sessionId, prompt: [{ type: "text", text: "Reply with exactly one word: ALPHA. No tools." }] }), 180000, "prompt A"),
+      withTimeout(b.send("session/prompt", { sessionId: nb.result.sessionId, prompt: [{ type: "text", text: "Reply with exactly one word: BRAVO. No tools." }] }), 180000, "prompt B"),
+    ]);
+    assert(!pa.error, "prompt A errored: " + JSON.stringify(pa.error));
+    assert(!pb.error, "prompt B errored: " + JSON.stringify(pb.error));
+    const ta = a.agentText(), tb = b.agentText();
+    assert(/alpha/i.test(ta), "session A missing its own reply");
+    assert(/bravo/i.test(tb), "session B missing its own reply");
+    assert(!/bravo/i.test(ta) && !/alpha/i.test(tb), `cross-talk between concurrent sessions (A="${ta.trim().slice(0, 40)}", B="${tb.trim().slice(0, 40)}")`);
+    return `two concurrent processes answered independently (A→ALPHA, B→BRAVO)`;
+  } finally { a.kill(); b.kill(); }
 }
 
 // Vision INPUT (paste/upload → inline {type:"image"} blocks in session/prompt).
@@ -636,6 +736,8 @@ const TESTS = [
   { name: "handshake", fn: testHandshake, slow: false, smoke: true },
   { name: "capabilities", fn: testCapabilities, slow: false, smoke: true },
   { name: "prompt-roundtrip", fn: testPrompt, slow: false },
+  { name: "cancel-mid-turn", fn: testCancelMidTurn, slow: false },
+  { name: "parallel-sessions", fn: testParallelSessions, slow: false },
   { name: "vision-prompt", fn: testVisionPrompt, slow: false },
   { name: "session-restore", fn: testRestore, slow: false },
   { name: "edit-diff-restore", fn: testEditDiffRestore, slow: false },

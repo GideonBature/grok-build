@@ -62,8 +62,13 @@
     voiceLive: false,
     // The configured send phrase (for highlighting it in the composer).
     voiceSendPhrase: "grok send",
-    // Messages dictated while Grok was busy, flushed when the turn ends.
-    voiceQueue: [],
+    // Render MIRROR of the focused session's host-owned send queue (#37) —
+    // messages typed/dictated while Grok was busy. All mutations route through
+    // the host (queueSend/dequeueSend/clearQueuedSends) and come back as a
+    // queuedSends snapshot, so the queue survives focus switches and the HOST
+    // flushes it (one combined prompt) when the session's turn ends.
+    sendQueue: [],
+    queuedWrapEl: null, // the .queued-msgs container pinned to the end of the chat
     activeAgentEl: null,
     activeAgentRaw: "",
     activeUserEl: null,
@@ -232,6 +237,7 @@
     check: `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
     clock: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
     plus: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`,
+    x: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
     upload: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></svg>`,
     download: `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 10 5 5 5-5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></svg>`,
     trash: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>`,
@@ -1557,6 +1563,21 @@
     hidePlanProcessing();
     hideGrokking();
     hideThinkingIndicator();
+    // Busy is per-session UI state — a swap must not leak the previous
+    // session's send/stop affordance (#37: a stale Stop turned Enter into a
+    // silent cancel; a stale arrow allowed a second prompt into a mid-turn
+    // session, which cancels its running tools). Start false; the buffer
+    // replay that follows re-derives the truth (agentStart sets busy,
+    // agentEnd/agentError/exit clear it).
+    state.busy = false;
+    state.busyLocked = false;
+    // The send queue is HOST-owned per session — do NOT post a clear here.
+    // Reset only the local render mirror (the transcript wipe above removed the
+    // blocks); the replay delivers the focused session's own queuedSends
+    // snapshot, so its queued messages reappear when you swap back.
+    state.sendQueue = [];
+    state.queuedWrapEl = null;
+    updateSendButton();
   }
 
   function showOnboarding(mode, info) {
@@ -3252,12 +3273,15 @@
   // ---------- send ----------
 
   function updateSendButton() {
-    // Three states:
+    // Four states:
     //  - idle (!busy): send icon, enabled, click → send the typed message.
     //  - busy + locked: spinner icon, disabled, no click action. Used for
     //    session-start priming and other flows the user shouldn't interrupt.
-    //  - busy + stoppable: stop icon, enabled, click → cancel grok mid-stream.
-    //    Used for regular prompts and the verdict afterTurn flow.
+    //  - busy + text typed: send icon, click → QUEUE the message for turn end.
+    //    Typed text signals send-intent, so neither click nor Enter may cancel
+    //    (#37 — a "send" that lands as Stop kills the running tools).
+    //  - busy + empty composer: stop icon, click → cancel grok mid-stream.
+    //    The only cancel affordance, mirroring Claude Code's model.
     sendBtn.classList.remove("stop", "initializing");
     // The mode switch (Agent/Plan/Auto-accept) restarts the gate and calls the CLI,
     // so it's locked whenever busy — like the model/effort controls. Crucially this
@@ -3276,6 +3300,10 @@
       sendBtn.title = "Initializing…";
       sendBtn.classList.add("initializing");
       sendBtn.disabled = true;
+    } else if (input.value.trim()) {
+      sendBtn.innerHTML = ICON.arrowUp;
+      sendBtn.title = "Queue — sends when Grok finishes";
+      sendBtn.disabled = false;
     } else {
       sendBtn.innerHTML = ICON.square;
       sendBtn.title = "Stop";
@@ -3284,12 +3312,39 @@
     }
   }
 
+  // Queue whatever is typed for send-at-turn-end. Returns true if something was
+  // queued. The one busy-path helper both Enter and the button click funnel
+  // through, so typed text can never turn into a cancel (#37).
+  function queueFromComposer() {
+    const t = input.value.trim();
+    if (!t) return false;
+    queueOutgoing(t);
+    input.value = "";
+    renderInputHighlight(); // also flips the busy button back to Stop (empty composer)
+    updateSlash();
+    return true;
+  }
+
   function sendOrStop() {
     if (state.busy) {
-      // Stop mode: ask the host to cancel grok's in-flight turn. We do NOT
-      // clear state.busy here — that happens when the cancelled turn actually
-      // ends (agentEnd / agentError), so the button stays as "Stop" until the
-      // CLI confirms.
+      // Typed text signals send-intent — queue it; text present never cancels.
+      if (queueFromComposer()) return;
+      if (state.busyLocked) return; // locked startup window has no cancel
+      // Empty composer + the square Stop icon: the one explicit cancel
+      // affordance. Stopping means "halt" — queued messages must not auto-fire
+      // into the cancelled turn's wake, so hand them back to the composer for
+      // the user to edit or re-send. clearQueuedSends precedes the cancel on
+      // the same channel, so the host empties its queue before the turn
+      // settles. We do NOT clear state.busy here — that happens when the
+      // cancelled turn actually ends (agentEnd / agentError), so the button
+      // stays as "Stop" until the CLI confirms.
+      if (state.sendQueue.length) {
+        input.value = state.sendQueue.join("\n\n");
+        state.sendQueue = [];
+        renderQueuedBlocks();
+        vscode.postMessage({ type: "clearQueuedSends" });
+        renderInputHighlight();
+      }
       vscode.postMessage({ type: "cancel" });
       return;
     }
@@ -3365,7 +3420,6 @@
         // Remember what's already typed; live partials replace only the tail.
         state.voiceBase = input.value;
         state.voiceLive = false;
-        state.voiceQueue = [];
         setMic("start");
       }
       vscode.postMessage({ type: "voiceStart" });
@@ -3400,6 +3454,10 @@
   // Mirror the composer text onto the backdrop, wrapping a trailing send command
   // ("grok send") in an accent pill. Call whenever the input value changes.
   function renderInputHighlight() {
+    // The busy button's face reads the composer too (text = queue-send arrow,
+    // empty = Stop) — refresh it on every input change; this function's call
+    // sites are exactly those.
+    updateSendButton();
     if (!inputHighlight) return;
     const text = input.value;
     const range = trailingSendPhrase(text, state.voiceSendPhrase);
@@ -3414,10 +3472,11 @@
     inputHighlight.scrollLeft = input.scrollLeft;
   }
 
-  // Submit a voice-dictated message (continuous "grok send"). Mirrors sendOrStop's
-  // send path but takes explicit text (the composer is cleared separately so the
-  // mic can keep listening for the next utterance).
-  function submitVoiceMessage(text) {
+  // Submit a message with explicit text — the send half of sendOrStop without
+  // reading the composer. Used by the busy-queue flush and by continuous voice
+  // ("grok send"), whose composer is cleared separately so the mic can keep
+  // listening for the next utterance.
+  function submitMessage(text) {
     const t = (text || "").trim();
     if (!t) return;
     state.busy = true;
@@ -3431,11 +3490,74 @@
     vscode.postMessage({ type: "send", text: t });
   }
 
-  // Send the next message dictated while Grok was busy (so you can keep talking
-  // through Grok's responses without waiting).
-  function flushVoiceQueue() {
-    if (state.busy || !state.voiceQueue.length) return;
-    submitVoiceMessage(state.voiceQueue.shift());
+  // ---------- queued sends (#37) ----------
+  // Messages composed while Grok is busy are HOST-owned per session (like
+  // chips): the webview posts queueSend and re-renders from the queuedSends
+  // snapshot, so the queue survives focus switches and the HOST flushes it as
+  // ONE combined prompt when the session's turn ends — even while backgrounded.
+  function queueOutgoing(text) {
+    vscode.postMessage({ type: "queueSend", text });
+  }
+
+  // One pending user block per queued message, pinned to the end of the
+  // conversation — italic + dashed border + clock tag reads "not sent yet" —
+  // with per-message Edit (back to the composer) and Remove actions.
+  function renderQueuedBlocks() {
+    let wrap = state.queuedWrapEl;
+    if (!state.sendQueue.length) {
+      if (wrap) wrap.remove();
+      state.queuedWrapEl = null;
+      return;
+    }
+    if (!wrap || !wrap.isConnected) {
+      wrap = document.createElement("div");
+      wrap.className = "queued-msgs";
+      state.queuedWrapEl = wrap;
+    }
+    wrap.innerHTML = "";
+    state.sendQueue.forEach((text, i) => {
+      const msg = document.createElement("div");
+      msg.className = "msg user queued";
+      const bubble = document.createElement("div");
+      bubble.className = "msg-bubble";
+      const hdr = document.createElement("div");
+      hdr.className = "queued-hdr";
+      const tag = document.createElement("span");
+      tag.className = "queued-tag";
+      tag.innerHTML = `${ICON.clock}<span>Queued</span>`;
+      tag.title = "Sends when Grok finishes";
+      const actions = document.createElement("span");
+      actions.className = "queued-actions";
+      const editBtn = document.createElement("button");
+      editBtn.className = "queued-action";
+      editBtn.title = "Edit — back to the composer";
+      editBtn.innerHTML = ICON.pencil;
+      editBtn.onclick = () => {
+        vscode.postMessage({ type: "dequeueSend", index: i });
+        input.value = input.value.trim() ? text + "\n\n" + input.value : text;
+        renderInputHighlight();
+        input.focus();
+      };
+      const rmBtn = document.createElement("button");
+      rmBtn.className = "queued-action";
+      rmBtn.title = "Remove from queue";
+      rmBtn.innerHTML = ICON.x;
+      rmBtn.onclick = () => vscode.postMessage({ type: "dequeueSend", index: i });
+      actions.appendChild(editBtn);
+      actions.appendChild(rmBtn);
+      hdr.appendChild(tag);
+      hdr.appendChild(actions);
+      const body = document.createElement("div");
+      body.className = "queued-text";
+      body.textContent = text;
+      body.title = text; // body is line-clamped; full text on hover
+      bubble.appendChild(hdr);
+      bubble.appendChild(body);
+      msg.appendChild(bubble);
+      wrap.appendChild(msg);
+    });
+    messagesEl.appendChild(wrap); // (re)pin to the end of the conversation
+    scrollToBottom();
   }
 
   // ---------- inbound ----------
@@ -3542,7 +3664,6 @@
           // live flag and any queued messages too, not just the button.
           state.mic = "idle";
           state.voiceLive = false;
-          state.voiceQueue = [];
           renderMic();
         }
         break;
@@ -3567,8 +3688,8 @@
         input.value = "";
         renderInputHighlight();
         if (t) {
-          if (state.busy) state.voiceQueue.push(t);
-          else submitVoiceMessage(t);
+          if (state.busy) queueOutgoing(t);
+          else submitMessage(t);
         }
         break;
       }
@@ -3619,6 +3740,13 @@
         // follow-up). Show "Grokking…" until the first real content replaces it.
         // The silent primer never emits agentStart, so it never shows here.
         showGrokking();
+        // Busy is event-sourced through the session buffer so a re-focus lands
+        // on the true state: agentStart marks a turn in flight (a live send
+        // already set busy before posting; a buffer REPLAY of a mid-turn
+        // session relies on this), agentEnd/agentError clear it.
+        state.busy = true;
+        state.busyLocked = false;
+        updateSendButton();
         break;
       case "thoughtChunk":
         appendThought(msg.text);
@@ -3809,21 +3937,24 @@
         addError(msg.text);
         state.busy = false;
         updateSendButton();
-        flushVoiceQueue(); // don't strand messages dictated during this turn
         break;
       case "agentEnd":
         hideGrokking(); // turn ended (defensive — content normally clears it first)
         hideThinkingIndicator();
         state.busy = false;
         updateSendButton();
-        flushVoiceQueue(); // send anything dictated while Grok was responding
         break;
       case "exit":
         hideGrokking();
         addError(`Grok exited (code ${msg.code}). Click the new session button to restart.`);
         state.busy = false;
-        state.voiceQueue = []; // session is dead — drop anything queued for it
         updateSendButton();
+        break;
+      case "queuedSends":
+        // Snapshot of the focused session's host-owned send queue — replayed on
+        // re-focus like everything else, so queued blocks survive session swaps.
+        state.sendQueue = Array.isArray(msg.items) ? msg.items : [];
+        renderQueuedBlocks();
         break;
       case "setBusy":
         // Host-driven busy state for flows where there's no natural agentEnd
@@ -3835,9 +3966,8 @@
         state.busyLocked = !!msg.locked;
         updateSendButton();
         if (!state.busy) {
-          // When a non-turn busy window clears (e.g. session-start priming), send
-          // anything dictated during it — priming has no agentEnd to flush on.
-          flushVoiceQueue();
+          // (Anything type-ahead-queued during the startup window is flushed by
+          // the HOST once the primer acks — nothing to do here.)
           // Priming just finished: the first hidden message was sent and processed,
           // so grok is finally ready. Reveal the version now — not at "initialized",
           // which fires while the primer is still in flight (spinner still up).
@@ -3935,7 +4065,12 @@
     // working — never a dead frame while a turn is unfinished (esp. with thinking
     // traces hidden). The turn-end boundary (promptComplete) is excluded so the
     // stand-in doesn't flash between it and agentEnd.
-    if (TURN_PROGRESS_MSGS.has(msg.type)) ensureActivityIndicator();
+    if (TURN_PROGRESS_MSGS.has(msg.type)) {
+      ensureActivityIndicator();
+      // Queued blocks live at the END of the conversation — re-pin them under
+      // freshly streamed content.
+      if (state.sendQueue.length && state.queuedWrapEl) messagesEl.appendChild(state.queuedWrapEl);
+    }
   });
 
   // ---------- wire ----------
@@ -4103,6 +4238,13 @@
   });
   renderInputHighlight();
   input.addEventListener("keydown", (e) => {
+    // IME composition (#38): while a CJK IME is composing (preedit underline /
+    // candidate window open), Enter confirms the candidate and arrows navigate
+    // it — the composer must not intercept ANY key, or a half-composed
+    // fragment gets sent (or queued, #37). `isComposing` is the standard
+    // signal; keyCode 229 is the legacy "IME processing" code some engines
+    // still report on the confirming keydown itself.
+    if (e.isComposing || e.keyCode === 229) return;
     if (!slashPopover.hidden && state.slashFiltered.length) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -4123,7 +4265,19 @@
     const sendKey = state.useCtrlEnter
       ? e.key === "Enter" && (e.metaKey || e.ctrlKey)
       : e.key === "Enter" && !e.shiftKey;
-    if (sendKey) { e.preventDefault(); sendOrStop(); }
+    if (sendKey) {
+      e.preventDefault();
+      if (state.busy) {
+        // Enter while Grok is working must never act as a hidden Stop (#37) —
+        // it silently cancelled in-flight tools ("Tool execution was cancelled
+        // by the user"). Queue the typed message (empty composer: no-op); it
+        // flushes when the turn ends. Cancelling is only the explicit click on
+        // the square Stop button (shown while the composer is empty).
+        queueFromComposer();
+        return;
+      }
+      sendOrStop();
+    }
   });
 
   document.addEventListener("dragenter", (e) => { e.preventDefault(); document.body.classList.add("dragging"); });
