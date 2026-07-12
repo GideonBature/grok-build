@@ -20,8 +20,11 @@
      an alpha multiplier, so this is a ~66%-opaque wash of mostly list-hover
      with a hint of foreground. Don't "normalize" the sum to 100%. */
   --chat-surface-code: color-mix(in srgb, var(--vscode-list-hoverBackground) 60%, var(--vscode-foreground) 6%);
-  --chat-radius-message: 16px;
-  --chat-radius-code: 10px;
+  /* Radius scale (largest container → smallest nested surface): user bubble
+     12 → block code / IN-OUT command block 8 → inline code chip 6. Keeps
+     nested corners visually concentric and matches the 8px icon buttons. */
+  --chat-radius-message: 12px;
+  --chat-radius-code: 8px;
 }
 
 * { box-sizing: border-box; }
@@ -609,6 +612,7 @@ body.thinking-hidden .msg.thinking { display: none; }
 
 .tool-flat {
   display: flex;
+  flex-wrap: wrap; /* the #41 details block breaks onto its own full-width row */
   align-items: flex-start;
   gap: 7px;
   font-size: var(--vscode-font-size);
@@ -616,6 +620,7 @@ body.thinking-hidden .msg.thinking { display: none; }
   padding: 3px 0;
   font-family: var(--vscode-font-family);
 }
+.tool-flat.has-details { cursor: pointer; }
 
 /* Generated media (grok /imagine image, /imagine-video video) */
 .generated-image {
@@ -744,11 +749,17 @@ body.thinking-hidden .msg.thinking { display: none; }
   transition: opacity 0.12s, transform 0.12s;
 }
 .tool-group-header:hover .tool-chevron { opacity: 0.8; }
-.tool-group.expanded .tool-chevron {
+/* Header-scoped (> .tool-group-header) on purpose: the body's command ROWS
+   carry their own chevrons whose state must not inherit from the group —
+   an unscoped selector rotated every row chevron to v whenever the group
+   was expanded, and hid them all while the group ran (#41 follow-up). */
+.tool-group.expanded > .tool-group-header .tool-chevron {
   opacity: 0.8;
   transform: rotate(90deg);
 }
-.tool-group.in-progress .tool-chevron { display: none; } /* can't expand while running */
+.tool-group.in-progress > .tool-group-header .tool-chevron { display: none; } /* can't expand while running */
+/* …except a lone running COMMAND, which is expandable immediately (#41). */
+.tool-group.in-progress.cmd-single > .tool-group-header .tool-chevron { display: inline-flex; }
 /* A running group stays muted like the Grokking / Thinking indicators — the
    blinking dots convey activity, not a brighter text color. */
 .tool-group-label { color: inherit; }
@@ -784,6 +795,87 @@ body.thinking-hidden .msg.thinking { display: none; }
   font-size: var(--vscode-font-size);
   color: var(--vscode-descriptionForeground);
 }
+/* #41: per-command expandable detail — Claude-Code-style IN/OUT block on the
+   shared code-chip surface. Every tool call stays one ellipsized line;
+   clickable command rows carry a trailing chevron (› collapsed, v expanded)
+   plus hover brightening — plain rows like get_command_or_subagent_output
+   don't react. */
+.tool-item.has-details, .tool-flat.has-details { cursor: pointer; user-select: none; }
+.tool-item.has-details:hover, .tool-flat.has-details:hover { color: var(--vscode-foreground); }
+.tool-item.has-details:hover .tool-chevron, .tool-flat.has-details:hover .tool-chevron { opacity: 0.8; }
+.tool-item.expanded .tool-chevron, .tool-flat.expanded .tool-chevron {
+  opacity: 0.8;
+  transform: rotate(90deg);
+}
+/* Single-line labels: truncate instead of wrapping (long grep patterns,
+   commands); the details block still breaks onto its own full-width row. */
+.tool-item-label, .tool-flat .tool-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-item-details {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 3px 0 6px;
+  cursor: default;      /* the block is content, not a toggle target */
+  user-select: text;    /* output must be selectable without collapsing */
+}
+.cmd-block {
+  background: var(--chat-surface-code);
+  border-radius: var(--chat-radius-code, 10px);
+  padding: 6px 10px;
+  font-size: 0.92em;
+  line-height: 1.45;
+}
+.cmd-io {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  gap: 0 8px;
+}
+.cmd-io + .cmd-io {
+  border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+.cmd-io-tag {
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.75;
+  font-size: 0.85em;
+  padding-top: 2px;
+  user-select: none;
+}
+.cmd-io pre {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+  font-size: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Long commands and outputs scroll inside the block instead of growing it. */
+.tool-cmd {
+  max-height: 140px;
+  overflow-y: auto;
+  color: var(--vscode-editor-foreground, var(--vscode-foreground));
+}
+.tool-cmd-output {
+  max-height: 260px;
+  overflow-y: auto;
+  color: var(--vscode-foreground);
+}
+.cmd-out-marker {
+  font-size: 0.88em;
+  color: var(--vscode-errorForeground);
+  margin-bottom: 3px;
+}
+.cmd-out-marker.muted { color: var(--vscode-descriptionForeground); }
+.cmd-out.failed .cmd-io-tag,
+.cmd-out.failed .tool-cmd-output { color: var(--vscode-errorForeground); }
+
 /* The line-count + "open diff" sit inline after the label on one row (they used
    to each take a full-width line via flex-basis:100%). A failure message
    (.tool-error) still keeps its own line. */
@@ -839,6 +931,43 @@ body.thinking-hidden .msg.thinking { display: none; }
   color: var(--vscode-errorForeground);
 }
 
+/* ---- bidi / RTL content ---- */
+
+/* RTL support, half two (half one is applyAutoDir in chat.js): each loose
+   prose line takes its direction from its own first strong character, so an
+   Arabic paragraph right-aligns with its punctuation on the correct side
+   while the chat chrome (bubble sides, toolbar, tool rows) stays LTR.
+   plaintext must sit on the CONTAINERS because renderMarkdown emits
+   paragraph text bare (with <br> breaks), never inside <p>. The default
+   text-align:start follows each line's resolved direction under plaintext. */
+.msg .body,
+.thinking-body,
+.card .plan-body,
+.subagent-result,
+.queued-text {
+  unicode-bidi: plaintext;
+}
+/* The composer is dir="auto" (typed Arabic right-aligns live). The UA gives
+   textarea[dir=auto] plaintext already; stating it on both keeps the
+   send-phrase mirror (#input-highlight) laid out byte-identically to the
+   textarea it overlays — same per-line direction resolution. */
+#input,
+.input-highlight {
+  unicode-bidi: plaintext;
+}
+/* Code is code: always LTR, isolated so surrounding RTL prose can't reorder
+   it (Codex pins its markdown code blocks dir="ltr" the same way). Also
+   keeps file-ref links readable inside RTL sentences. */
+.code-block pre,
+.msg .body code,
+.card .plan-body code,
+.thinking-body code,
+.subagent-result code {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
+}
+
 /* ---- markdown in agent messages ---- */
 
 .msg.agent .body { white-space: normal; line-height: 1.55; }
@@ -858,7 +987,7 @@ body.thinking-hidden .msg.thinking { display: none; }
 .msg.agent .body ul,
 .msg.agent .body ol {
   margin: 6px 0;
-  padding-left: 22px;
+  padding-inline-start: 22px; /* logical: indents from the right for RTL lists */
 }
 .msg.agent .body ul { list-style-type: disc; }
 .msg.agent .body ol { list-style-type: decimal; }
@@ -974,7 +1103,7 @@ body.thinking-hidden .msg.thinking { display: none; }
 .msg.agent .body td {
   border: 1px solid var(--vscode-editorWidget-border);
   padding: 5px 8px;
-  text-align: left;
+  text-align: start; /* follows the cell's dir="auto" (RTL cells right-align) */
   vertical-align: top;
   line-height: 1.45;
   /* Never break inside a word (headers looked cramped/narrow when long words
@@ -1872,7 +2001,7 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
 .card .plan-body > :last-child { margin-bottom: 0; }
 .card .plan-body p { margin: 4px 0; }
 .card .plan-body ul,
-.card .plan-body ol { margin: 4px 0; padding-left: 20px; }
+.card .plan-body ol { margin: 4px 0; padding-inline-start: 20px; }
 .card .plan-body li { margin: 2px 0; }
 .card .plan-body h1,
 .card .plan-body h2,

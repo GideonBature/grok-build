@@ -49,7 +49,7 @@ export interface PlanHistoryItem {
 
 /** host -> webview */
 export type HostMsg =
-  | { type: "initialState"; effort: string; cwd: string; useCtrlEnter: boolean; extVersion: string; showThinking: boolean }
+  | { type: "initialState"; effort: string; cwd: string; useCtrlEnter: boolean; extVersion: string; showThinking: boolean; expandCommandOutputs: boolean }
   | { type: "showThinking"; value: boolean }
   | { type: "fontScale"; value: number }
   | { type: "grokUpdateStatus"; current?: string | null; latest?: string | null; updateAvailable?: boolean; policy?: unknown; error?: string }
@@ -110,6 +110,12 @@ export type HostMsg =
   // subagent_finished — duration/output stats the Composer agent's completed
   // tool_call_update lacks, and a completion backstop for the card.
   | { type: "subagentUpdate"; update?: unknown }
+  // A finished shell command's full text + captured output (#41) — snapshotted
+  // host-side at terminal/release (the extension runs the commands, so the
+  // buffer is exactly what grok received). exitCode null = killed/cancelled.
+  | { type: "commandOutput"; command: string; output: string; exitCode: number | null; truncated: boolean }
+  // grok.expandCommandOutputs — pre-expand every command's IN/OUT detail.
+  | { type: "expandCommandOutputs"; value: boolean }
   // nextOffset = the index offset the next load-more should request — ids CONSUMED
   // from the on-disk index, not entries shown (hidden subagent sessions occupy
   // slots without producing rows).
@@ -140,6 +146,7 @@ export type WebviewMsg =
   | { type: "showLogs" }
   | { type: "moveView"; location: "panel" | "sidebar" | "auxiliarybar" }
   | { type: "setShowThinking"; value: boolean }
+  | { type: "setExpandCommandOutputs"; value: boolean }
   | { type: "dropFile"; path: string; shift: boolean }
   | { type: "permissionAnswer"; requestId: number | string; optionId: string }
   | { type: "exitPlanAnswer"; requestId: number | string; verdict: "approved" | "abandoned" | "rejected"; comment?: string }
@@ -184,7 +191,8 @@ const HOST_MESSAGE_TYPE_MAP: Record<HostMsg["type"], true> = {
   planNotice: true, planBlocked: true, promptComplete: true, contextUsage: true, agentReset: true,
   agentError: true, agentEnd: true, exit: true, setBusy: true, summarizing: true,
   sessionContext: true, clearMessages: true, onboarding: true, error: true,
-  xaiNotification: true, subagentUpdate: true, sessions: true, sessionDot: true, queuedSends: true,
+  xaiNotification: true, subagentUpdate: true, commandOutput: true, expandCommandOutputs: true,
+  sessions: true, sessionDot: true, queuedSends: true,
 };
 
 const WEBVIEW_MESSAGE_TYPE_MAP: Record<WebviewMsg["type"], true> = {
@@ -192,7 +200,7 @@ const WEBVIEW_MESSAGE_TYPE_MAP: Record<WebviewMsg["type"], true> = {
   setMode: true, removeChip: true, toggleChip: true, openFile: true, openUrl: true,
   openDiff: true, exportExpr: true, setEffort: true, openGlobalConfig: true,
   openProjectConfig: true, runMcpList: true, showLogs: true, moveView: true,
-  setShowThinking: true,
+  setShowThinking: true, setExpandCommandOutputs: true,
   dropFile: true, permissionAnswer: true, exitPlanAnswer: true, questionAnswer: true,
   questionCancel: true, setModel: true, runInstallCmd: true, runGrokLogin: true,
   logout: true, checkGrokUpdate: true, updateGrok: true, recheckConnection: true,

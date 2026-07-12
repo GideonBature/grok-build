@@ -274,6 +274,12 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       if (e.affectsConfiguration("grok.showThinking")) {
         this.postShowThinking();
       }
+      if (e.affectsConfiguration("grok.expandCommandOutputs")) {
+        this.post({
+          type: "expandCommandOutputs",
+          value: vscode.workspace.getConfiguration("grok").get<boolean>("expandCommandOutputs", false),
+        });
+      }
       if (e.affectsConfiguration("grok.includeActiveFileByDefault")) {
         // Apply the toggle immediately: disabling removes a visible context
         // chip right away (not on the next editor event), enabling shows it.
@@ -584,7 +590,7 @@ See design doc for the full state machine diagram.`;
       // the [Plan approved] follow-up below is the real continuation. No
       // agentReset here (unlike reject): pre-card narration the user already
       // read stays on screen.
-      void client.cancel();
+      void client.cancel("plan-verdict approved");
       session.suppressPlanReject = true;
       if (feedback) {
         session.userMessageCount += 1;
@@ -616,7 +622,7 @@ See design doc for the full state machine diagram.`;
 
     // rejected / abandoned: cancel the in-flight turn and suppress its content
     // so the false-approval response doesn't reach the screen.
-    void client.cancel();
+    void client.cancel(`plan-verdict ${verdict}`);
     this.emit(session, { type: "agentReset" });
     session.suppressPlanReject = true;
 
@@ -1593,6 +1599,21 @@ See design doc for the full state machine diagram.`;
       if (gen !== session.gen) return;
       this.emit(session, { type: "subagentUpdate", update: u });
     });
+    client.on("commandDone", (info: { command: string; output: string; exitCode: number | null; truncated: boolean }) => {
+      if (gen !== session.gen) return;
+      // Defensive display cap on top of the terminal's own byte limit — a huge
+      // buffer must not stall postMessage/DOM (#41). Grok saw the same capped
+      // buffer, so the cut is honest either way.
+      const MAX_OUTPUT_CHARS = 100_000;
+      const over = info.output.length > MAX_OUTPUT_CHARS;
+      this.emit(session, {
+        type: "commandOutput",
+        command: info.command,
+        output: over ? info.output.slice(0, MAX_OUTPUT_CHARS) : info.output,
+        exitCode: info.exitCode,
+        truncated: info.truncated || over,
+      });
+    });
     client.on("permissionRequest", (req: PermissionRequest) => {
       if (gen !== session.gen) return;
       // While planning, decline any mutating permission outright. Agent mode
@@ -1846,7 +1867,7 @@ See design doc for the full state machine diagram.`;
         await this.newFocusedSession();
         break;
       case "cancel":
-        await this.focused.client?.cancel();
+        await this.focused.client?.cancel("user Stop click");
         break;
       case "queueSend": {
         // Host-owned per-session queue (#37): the webview renders a mirror from
@@ -2058,6 +2079,11 @@ See design doc for the full state machine diagram.`;
         await vscode.workspace
           .getConfiguration("grok")
           .update("showThinking", !!msg.value, vscode.ConfigurationTarget.Global);
+        break;
+      case "setExpandCommandOutputs":
+        await vscode.workspace
+          .getConfiguration("grok")
+          .update("expandCommandOutputs", !!msg.value, vscode.ConfigurationTarget.Global);
         break;
       case "runInstallCmd": {
         const term = vscode.window.createTerminal("Install Grok");
@@ -3222,6 +3248,7 @@ See design doc for the full state machine diagram.`;
       useCtrlEnter: cfg.get("useCtrlEnterToSend", false),
       extVersion: (this.context.extension.packageJSON as { version?: string })?.version ?? "",
       showThinking: cfg.get("showThinking", false),
+      expandCommandOutputs: cfg.get("expandCommandOutputs", false),
     });
     // Sync the active-editor context chip into the fresh webview (the config
     // gate + no-editor case live inside refreshImplicitChip).
@@ -3246,12 +3273,12 @@ See design doc for the full state machine diagram.`;
   // them out costs those flows nothing.
   private static readonly SUPPRESS_TYPES = new Set([
     "messageChunk", "userMessageChunk", "thoughtChunk", "toolCall", "toolCallUpdate",
-    "promptComplete", "xaiNotification", "subagentUpdate", "agentEnd",
+    "promptComplete", "xaiNotification", "subagentUpdate", "commandOutput", "agentEnd",
   ]);
   // Subset: content only, not lifecycle. Lets promptComplete/agentEnd through so
   // the webview's `busy` state clears when the false-approval turn ends.
   private static readonly PLAN_REJECT_SUPPRESS = new Set([
-    "messageChunk", "userMessageChunk", "thoughtChunk", "toolCall", "toolCallUpdate", "xaiNotification", "subagentUpdate",
+    "messageChunk", "userMessageChunk", "thoughtChunk", "toolCall", "toolCallUpdate", "xaiNotification", "subagentUpdate", "commandOutput",
   ]);
 
   private post(message: HostMsg): void {
@@ -3754,8 +3781,8 @@ See design doc for the full state machine diagram.`;
     <div class="composer-card">
       <div id="attachments" class="attachments"></div>
       <div class="composer-input-wrap">
-        <div id="input-highlight" class="input-highlight" aria-hidden="true"></div>
-        <textarea id="input" placeholder="Ask Grok..." rows="2"></textarea>
+        <div id="input-highlight" class="input-highlight" aria-hidden="true" dir="auto"></div>
+        <textarea id="input" placeholder="Ask Grok..." rows="2" dir="auto"></textarea>
         <button id="mic-btn" class="mic-btn" title="Voice control"></button>
       </div>
       <div class="composer-toolbar">

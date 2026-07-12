@@ -340,3 +340,15 @@ the steady-state fix.
   its first render resolves. Themed to VS Code dark/light; `securityLevel:"strict"`;
   malformed/half-streamed diagrams keep the readable source. No CSP change (the lib
   has no `eval`/`new Function`; its inline styles are covered by `style-src`).
+- **RTL content renders per-block, the chrome never mirrors.** `applyAutoDir`
+  (chat.js) stamps `dir="auto"` on every block element `renderMarkdown` emits
+  (ul/ol/li, h1–h3, td/th) after each `innerHTML` render site; loose paragraph
+  text — which `renderMarkdown` emits bare with `<br>` breaks, never `<p>` — is
+  covered by `unicode-bidi: plaintext` on the prose containers in chat.css
+  (`.msg .body`, `.thinking-body`, `.plan-body`, `.subagent-result`,
+  `.queued-text`), so each line takes its direction from its first strong
+  character. Code is pinned LTR (`.code-block pre` + inline `code`:
+  `direction: ltr; unicode-bidi: isolate`), list indent uses
+  `padding-inline-start`, table cells `text-align: start`. The composer textarea
+  and its `#input-highlight` send-phrase mirror are both `dir="auto"` with
+  matching `plaintext` so the overlay stays byte-aligned per line.

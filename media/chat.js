@@ -198,6 +198,14 @@
     // & debug. The host posts the real value on init and on config change.
     showThinking: false,
     thinkingIndicatorEl: null,
+    // Command rows awaiting their output ({command, details, done}) — the
+    // host's commandOutput (snapshotted at terminal/release, #41) attaches to
+    // the oldest un-served row with the exact same command string (FIFO).
+    pendingCommandDetails: [],
+    // grok.expandCommandOutputs: new command rows render with their IN/OUT
+    // detail already open (v). Tool GROUPS still collapse as usual — this
+    // governs only the per-command detail inside them / on flat rows.
+    expandCommandOutputs: false,
   };
 
   // Matches any version of the extension's primer (v1, v2, …). Used during
@@ -919,6 +927,20 @@
       .replace(/\x00M(\d+)\x00/g, (_, i) => mathHtml[+i]);
   }
 
+  // RTL content support, half one: dir="auto" on every block element
+  // renderMarkdown emits, so each takes its direction from its own first
+  // strong character — an Arabic list right-aligns with markers on the right
+  // while an English block in the same message stays LTR. Loose paragraph
+  // text can't be covered here (renderMarkdown emits it bare with <br>
+  // breaks, not <p>) — that half is `unicode-bidi: plaintext` on the
+  // containers in chat.css. Code deliberately never gets dir=auto: chat.css
+  // pins pre/code LTR. Runs after every innerHTML = renderMarkdown(...).
+  function applyAutoDir(root) {
+    for (const el of root.querySelectorAll("ul, ol, li, h1, h2, h3, td, th")) {
+      el.setAttribute("dir", "auto");
+    }
+  }
+
   // ---------- popovers ----------
 
   function closePopovers() {
@@ -1191,6 +1213,17 @@
         applyThinkingVisibility();
         vscode.postMessage({ type: "setShowThinking", value: state.showThinking });
         renderConfigDebugPanel(); // re-render so the switch reflects the new state
+      },
+    );
+    // Expand command outputs (#41) — pre-open every command's IN/OUT detail
+    // (tool groups still collapse as usual). Persisted via grok.expandCommandOutputs.
+    addGearItem(
+      `<span>Expand command outputs</span><span class="popover-switch${state.expandCommandOutputs ? " on" : ""}" role="switch" aria-checked="${state.expandCommandOutputs}"><span class="popover-switch-knob"></span></span>`,
+      () => {
+        state.expandCommandOutputs = !state.expandCommandOutputs;
+        applyExpandCommandOutputs();
+        vscode.postMessage({ type: "setExpandCommandOutputs", value: state.expandCommandOutputs });
+        renderConfigDebugPanel();
       },
     );
     addGearSep();
@@ -1579,6 +1612,7 @@
     state.toolItemsByToolCallId.clear();
     state.toolFailuresById.clear();
     state.subagentCards.clear();
+    state.pendingCommandDetails = [];
     state.turnAgentActionsEl = null;
     state.activeAgentEl = null;
     state.activeAgentRaw = "";
@@ -1723,7 +1757,7 @@
 
     const body = document.createElement("div");
     body.className = "body";
-    if (text) { body.innerHTML = renderMarkdown(text); renderMermaidIn(body); }
+    if (text) { body.innerHTML = renderMarkdown(text); applyAutoDir(body); renderMermaidIn(body); }
     contentParent.appendChild(body);
 
     if (role === "user" && chips && chips.length > 0) {
@@ -1928,6 +1962,9 @@
     const command = r.command || r.cmd;
     const pattern = r.glob_pattern || r.pattern || r.query || r.regex || r.search;
     const url = r.url || r.uri;
+    // Deliberate short trim (40 chars): collapsed rows read as a scannable
+    // summary, not a wall of shell — the full command lives one click away in
+    // the IN/OUT detail. (CSS still single-line-ellipsizes whatever remains.)
     const clamp = (s) => (s && s.length > 40 ? s.slice(0, 40) + "…" : s);
     // A search tool's *pattern* is the useful target — prefer it over the path it
     // searched (grep ships both `pattern` and `path:"."`, which would otherwise
@@ -2018,6 +2055,17 @@
       lbl.className = "tool-label";
       lbl.textContent = toolLabel(calls[0]);
       flat.appendChild(lbl);
+      // #41: a lone command's expandable detail (full command + output) moves
+      // into the flat row — moving the NODES keeps the pendingCommandDetails
+      // reference valid, so an output that lands after the flatten still
+      // attaches.
+      const detailsEl = el.querySelector(".tool-item-details");
+      if (detailsEl) {
+        const chev = el.querySelector(".tool-item .tool-chevron");
+        if (chev) flat.appendChild(chev);
+        flat.appendChild(detailsEl);
+        wireCommandToggle(flat, detailsEl);
+      }
       el.replaceWith(flat);
       const fail = calls[0].toolCallId && state.toolFailuresById.get(calls[0].toolCallId);
       if (fail) applyToolFailure(flat, fail); // a single tool that failed carries its error
@@ -2066,21 +2114,151 @@
 
     const item = document.createElement("div");
     item.className = "tool-item";
-    item.textContent = toolLabel(call);
+    // Label in its own span so it can single-line ellipsize (long grep
+    // patterns / commands must truncate, not wrap) while the details block
+    // still breaks onto its own full-width row.
+    const itemLabel = document.createElement("span");
+    itemLabel.className = "tool-item-label";
+    itemLabel.textContent = toolLabel(call);
+    item.appendChild(itemLabel);
     body.appendChild(item);
     if (call.toolCallId) state.toolItemsByToolCallId.set(call.toolCallId, item);
+    // #41: a shell command's row carries an expandable detail — the FULL
+    // command text immediately (grok truncates its titles), and the complete
+    // captured output once the terminal finishes.
+    const cmd = call.rawInput && typeof call.rawInput.command === "string" ? call.rawInput.command.trim() : "";
+    if (cmd) attachCommandDetails(item, cmd);
 
     hdr.innerHTML =
       toolIconFor(el._calls) +
       `<span class="tool-group-label">${escapeHtml(inProgressLabel(call))}</span>` +
       `<span class="tool-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>` +
       `<span class="tool-chevron" aria-hidden="true">${ICON.chevronRight}</span>`;
+    // A lone in-progress COMMAND is expandable immediately — its chevron shows
+    // now (multi-tool groups keep theirs until the batch closes), and
+    // expanding also opens the row's IN/OUT detail so one click reveals the
+    // full command mid-run.
+    el.classList.toggle(
+      "cmd-single",
+      el._calls.length === 1 && !!(call.rawInput && (call.rawInput.command || call.rawInput.cmd)),
+    );
     hdr.onclick = () => {
       const expanded = !body.hidden;
       body.hidden = expanded;
       el.classList.toggle("expanded", !expanded);
+      if (!expanded && el.classList.contains("cmd-single")) {
+        const d = body.querySelector(".tool-item-details");
+        const row = body.querySelector(".tool-item.has-details");
+        if (d && d.hidden) {
+          d.hidden = false;
+          if (row) row.classList.add("expanded");
+        }
+      }
     };
     scrollToBottom();
+  }
+
+  // #41: expandable per-command detail — a Claude-Code-style IN/OUT block on
+  // the shared code-chip surface. Created with the full command the moment the
+  // row appears (grok truncates its titles); the captured output (host-side
+  // snapshot at terminal/release — the same bytes grok received) lands later
+  // via the commandOutput message. Always available, collapsed by default;
+  // the row carries the same chevron + hover affordance as a tool-group
+  // header. Shared by grouped rows and the lone flat row (closeToolGroup
+  // moves the chevron + details nodes into the flat form).
+  // Sync every command detail (open/closed + chevron) to the
+  // expandCommandOutputs preference — used by the config watcher and the gear
+  // switch.
+  function applyExpandCommandOutputs() {
+    for (const row of messagesEl.querySelectorAll(".has-details")) {
+      const d = row.querySelector(".tool-item-details");
+      if (!d) continue;
+      d.hidden = !state.expandCommandOutputs;
+      row.classList.toggle("expanded", !d.hidden);
+    }
+  }
+
+  function wireCommandToggle(rowEl, details) {
+    rowEl.classList.add("has-details"); // hover highlight + chevron = "this one is clickable"
+    rowEl.classList.toggle("expanded", !details.hidden);
+    rowEl.title = "Show full command and output";
+    rowEl.addEventListener("click", (e) => {
+      if (e.target.closest("a, button")) return; // preview links keep their own click
+      if (e.target.closest(".tool-item-details")) return; // selecting text inside must not collapse
+      details.hidden = !details.hidden;
+      rowEl.classList.toggle("expanded", !details.hidden); // › ↔ v
+    });
+  }
+
+  function attachCommandDetails(item, command) {
+    // Chevron at the END of the (possibly ellipsized) command line: › when
+    // collapsed, rotated to v while expanded.
+    const chevron = document.createElement("span");
+    chevron.className = "tool-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    chevron.innerHTML = ICON.chevronRight;
+    item.appendChild(chevron);
+
+    const details = document.createElement("div");
+    details.className = "tool-item-details";
+    details.hidden = !state.expandCommandOutputs; // grok.expandCommandOutputs opens new rows pre-expanded
+    const block = document.createElement("div");
+    block.className = "cmd-block";
+    const inRow = document.createElement("div");
+    inRow.className = "cmd-io";
+    const inTag = document.createElement("span");
+    inTag.className = "cmd-io-tag";
+    inTag.textContent = "IN";
+    inRow.appendChild(inTag);
+    const cmd = document.createElement("pre");
+    cmd.className = "tool-cmd";
+    cmd.textContent = command;
+    inRow.appendChild(cmd);
+    block.appendChild(inRow);
+    details.appendChild(block);
+    item.appendChild(details);
+
+    wireCommandToggle(item, details);
+    state.pendingCommandDetails.push({ command, details, done: false });
+  }
+
+  function attachCommandOutput(details, msg) {
+    const block = details.querySelector(".cmd-block");
+    if (!block || block.querySelector(".cmd-out")) return; // idempotent (buffer replay)
+    const outRow = document.createElement("div");
+    outRow.className = "cmd-io cmd-out";
+    const tag = document.createElement("span");
+    tag.className = "cmd-io-tag";
+    tag.textContent = "OUT";
+    outRow.appendChild(tag);
+    const body = document.createElement("div");
+    body.className = "cmd-out-body";
+    // Success is silent (exit 0 = just the output); failure gets an [Error]
+    // marker + error tint; a kill is not an error.
+    if (msg.exitCode != null && msg.exitCode !== 0) {
+      outRow.classList.add("failed");
+      const mark = document.createElement("div");
+      mark.className = "cmd-out-marker";
+      mark.textContent = `[Error] exit ${msg.exitCode}`;
+      body.appendChild(mark);
+    } else if (msg.exitCode == null) {
+      const mark = document.createElement("div");
+      mark.className = "cmd-out-marker muted";
+      mark.textContent = "[Cancelled] no exit code";
+      body.appendChild(mark);
+    }
+    const out = document.createElement("pre");
+    out.className = "tool-cmd-output";
+    out.textContent = msg.output || "(no output)";
+    body.appendChild(out);
+    if (msg.truncated) {
+      const note = document.createElement("div");
+      note.className = "cmd-out-marker muted";
+      note.textContent = "output truncated — grok saw the same cut";
+      body.appendChild(note);
+    }
+    outRow.appendChild(body);
+    block.appendChild(outRow);
   }
 
   function attachDiffPreviewToToolItem(toolCallId, diff) {
@@ -2328,6 +2506,7 @@
     if (result) {
       const body = el.querySelector(".subagent-result");
       body.innerHTML = `<div class="subagent-result-label">Output of the subagent:</div>` + renderMarkdown(result);
+      applyAutoDir(body);
       const row = el.querySelector(".subagent-row");
       row.classList.add("expandable");
       row.title = "Show the subagent's result";
@@ -2503,6 +2682,7 @@
     state.agentRenderScheduled = false;
     if (!state.activeAgentEl) return;
     state.activeAgentEl.innerHTML = renderMarkdown(state.activeAgentRaw);
+    applyAutoDir(state.activeAgentEl);
     renderMermaidIn(state.activeAgentEl);
     const wrapper = state.activeAgentEl.parentElement;
     if (wrapper) wrapper._copyText = state.activeAgentRaw;
@@ -2610,6 +2790,7 @@
     const selBlocks = parseSelectionBlocks(parsed.body);
     const imageTags = parseImageTags(selBlocks.body);
     state.activeUserEl.innerHTML = renderMarkdown(imageTags.body);
+    applyAutoDir(state.activeUserEl);
     const msgEl = state.activeUserEl.closest(".msg");
     if (msgEl) msgEl._copyText = imageTags.body;
     const chipTags = [
@@ -3316,12 +3497,14 @@
     const body = document.createElement("div");
     body.className = "plan-body";
     body.innerHTML = planText ? renderMarkdown(planText) : "(empty plan)";
+    applyAutoDir(body);
     renderMermaidIn(body);
     el.appendChild(body);
 
     const feedback = document.createElement("textarea");
     feedback.className = "plan-feedback";
     feedback.rows = 2;
+    feedback.setAttribute("dir", "auto");
     feedback.placeholder = "Optional comment — Grok decides what to do with it";
     el.appendChild(feedback);
 
@@ -3386,6 +3569,7 @@
       body.className = "plan-body";
       body.hidden = true;
       body.innerHTML = text ? renderMarkdown(text) : "(empty plan)";
+      applyAutoDir(body);
       renderMermaidIn(body);
 
       el.appendChild(makePlanToggle(body));
@@ -3851,6 +4035,7 @@
         state.cwd = msg.cwd || "";
         state.extVersion = msg.extVersion || "";
         if (typeof msg.showThinking === "boolean") state.showThinking = msg.showThinking;
+        if (typeof msg.expandCommandOutputs === "boolean") state.expandCommandOutputs = msg.expandCommandOutputs;
         applyThinkingVisibility();
         break;
       case "showThinking":
@@ -4254,6 +4439,32 @@
         if (msg.window) state.contextWindow = msg.window;
         updateDonut(msg.used);
         break;
+      case "expandCommandOutputs":
+        // Live toggle (grok.expandCommandOutputs): applies to existing rows
+        // too, and sets the default for rows still to come.
+        state.expandCommandOutputs = !!msg.value;
+        applyExpandCommandOutputs();
+        if (state.gearView === "config") renderConfigDebugPanel(); // keep the switch in sync
+        break;
+      case "commandOutput": {
+        // A finished shell command's captured output (#41). Attach to the
+        // oldest un-served row with the exact same command; if no row matches
+        // (title-only shapes, a race) render a standalone row so the output is
+        // never dropped.
+        const pending = state.pendingCommandDetails.find((p) => !p.done && p.command === msg.command);
+        let details = pending && pending.details;
+        if (pending) pending.done = true;
+        if (!details) {
+          addToToolGroup({ title: truncate(`Run ${msg.command}`, 120), kind: "execute", rawInput: { command: msg.command } });
+          const fallback = state.pendingCommandDetails[state.pendingCommandDetails.length - 1];
+          if (fallback && !fallback.done && fallback.command === msg.command) {
+            fallback.done = true;
+            details = fallback.details;
+          }
+        }
+        if (details) attachCommandOutput(details, msg);
+        break;
+      }
       case "agentReset": {
         hidePlanProcessing(); // turn is being reset, indicator no longer applies
         hideGrokking();

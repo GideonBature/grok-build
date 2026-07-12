@@ -1,8 +1,8 @@
 {
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build for VS Code (Community)",
-  "description": "VS Code client for xAI's Grok Build CLI — review edits in a diff before approving, @-mention files, resumable history, inline image/video, and voice. Requires the Grok Build CLI plus a SuperGrok or X Premium+ subscription (or an xAI API key). MIT, open-source. Not affiliated with or endorsed by xAI.",
-  "version": "1.5.6",
+  "description": "GUI for Grok Build CLI (incl. Grok 4.5). Voice control, multiple sessions, images and videos, Mermaid diagrams, and LaTeX. Works with SuperGrok, X Premium+, and xAI API key. MIT, open-source. Not affiliated with or endorsed by xAI.",
+  "version": "1.5.8",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
@@ -220,6 +220,11 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Show Grok's reasoning (thinking) traces in chat. Off by default — a lightweight \"Thinking…\" indicator stands in while Grok reasons. Also toggleable live from the gear menu → **Config & debug → Show thinking traces** (applies to already-loaded sessions too)."
+        },
+        "grok.expandCommandOutputs": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Expand each shell command's IN/OUT details — the full command text and its captured output — by default (useful for auditing Auto-accept sessions). Tool groups (\"Ran N commands\") still collapse as usual and need to be expanded first; a single command outside a group shows its details immediately. Off: click a command row (›) to expand just that one. Also toggleable live from the gear menu → **Config & debug → Expand command outputs**."
         },
         "grok.telemetry.enabled": {
           "type": "boolean",

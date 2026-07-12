@@ -152,6 +152,14 @@ export class AcpClient extends EventEmitter {
   private mediaGenCallIds = new Set<string>();
 
   /**
+   * terminalId → the command that terminal is running. The chat shows each
+   * finished command's full output as the row's expandable detail (#41); the
+   * snapshot is taken at `terminal/release`, when the buffer holds exactly
+   * what grok itself received (same byte cap).
+   */
+  private terminalCommands = new Map<string, string>();
+
+  /**
    * Client-enforced plan gate. While true, workspace file writes and mutating
    * shell commands are refused at the (mandatory) fs/terminal handlers — see
    * `plan-gate.ts`. The host toggles this; the CLI's own plan mode is advisory.
@@ -328,8 +336,13 @@ export class AcpClient extends EventEmitter {
     return meta;
   }
 
-  async cancel(): Promise<void> {
+  async cancel(reason = "unspecified"): Promise<void> {
     if (!this.sessionId) return;
+    // Log every outbound cancel with its trigger — the CLI logs the receipt
+    // (`shell.cancel.received … trigger:null`) but not who asked, so when a
+    // user reports "my turn died and I touched nothing" (#37) this line is
+    // what attributes the cancel to a Stop click / plan verdict / nothing-of-ours.
+    this.opts.log(`[cancel] sending session/cancel (${reason}) for ${this.sessionId}`);
     // ACP defines session/cancel as a notification (no id) — sending it as a
     // request causes grok-cli to ignore it. Write directly to stdin without an
     // id and don't await a response.
@@ -561,7 +574,9 @@ export class AcpClient extends EventEmitter {
           this.respondError(id, PLAN_BLOCKED_CODE, PLAN_BLOCKED_TERMINAL_MSG);
           return;
         }
-        this.respondOk(id, this.terminal.create(params));
+        const created = this.terminal.create(params);
+        this.terminalCommands.set(created.terminalId, params.command);
+        this.respondOk(id, created);
         return;
       }
       if (method === "terminal/output") {
@@ -583,6 +598,21 @@ export class AcpClient extends EventEmitter {
       }
       if (method === "terminal/release") {
         if (!this.terminal) throw new Error("terminal handler not registered");
+        // Snapshot the finished command's output before the buffer is dropped
+        // (#41) — release is the last moment it exists.
+        const cmd = this.terminalCommands.get(params.terminalId);
+        if (cmd !== undefined) {
+          this.terminalCommands.delete(params.terminalId);
+          try {
+            const snap = this.terminal.output(params.terminalId);
+            this.emit("commandDone", {
+              command: cmd,
+              output: snap.output,
+              exitCode: snap.exitStatus ? snap.exitStatus.exitCode : null,
+              truncated: snap.truncated,
+            });
+          } catch { /* terminal already gone — nothing to report */ }
+        }
         this.terminal.release(params.terminalId);
         this.respondOk(id, {});
         return;

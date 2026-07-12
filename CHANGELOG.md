@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.5.8 — 2026-07-12
+
+### Fixed
+
+- **RTL text (Arabic, Hebrew, Farsi) now renders correctly** (user report). Every paragraph and block takes its direction from its own first strong character — right-aligned with punctuation on the correct side — across chat bubbles, thinking traces, plan cards, subagent results, tables, lists (markers and indent flip too), and the queued block; the composer follows as you type. Code blocks and inline code stay pinned LTR (the same rule the Codex extension uses), and the chat chrome doesn't move — only text direction changes, per block. ([media/chat.js](media/chat.js), [media/chat.css](media/chat.css), [src/sidebar.ts](src/sidebar.ts))
+
+## 1.5.7 — 2026-07-12
+
+### Added
+
+- **Command details (#41).** Every shell-command row expands (trailing `›` ↔ `v`) into a Claude-Code-style **IN/OUT block**: the full command text immediately — a lone running command is expandable mid-run — and the complete captured output when it finishes (the extension executes the commands itself, so the output is byte-for-byte what grok received). Exit 0 stays silent; failures render an `[Error] exit N` marker with error-tinted output; kills render a muted `[Cancelled]`. `grok.expandCommandOutputs` (also gear → Config & debug) pre-opens every detail — the audit view for Auto-accept sessions. Live-session only: the CLI doesn't replay terminals on restore. ([src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js))
+
+### Changed
+
+- **Tool rows read as one scannable line** — labels trim at 40 chars (full text one click away), long content ellipsizes at the row edge instead of wrapping, and the corner-radius scale is unified (bubbles 12 → code/IN-OUT blocks 8 → inline chips 6). ([media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- Refreshed the Marketplace description and README (new screenshots: cost control, effort picker, file chips). ([README.md](README.md), [package.json](package.json))
+- Every outbound `session/cancel` is logged with its trigger (Stop click / plan verdict) in the Grok output channel, so any future spurious-cancel report (#37) is attributable at a glance. ([src/acp.ts](src/acp.ts))
+
+### Fixed
+
+- Private working docs no longer ship inside the public `.vsix` (they were bundled because `.vscodeignore` — not `.gitignore` — decides the package contents). ([.vscodeignore](.vscodeignore))
+
 ## 1.5.6 — 2026-07-11
 
 ### Added

@@ -16,7 +16,9 @@ function groupLabel(doc: Document): string | null {
   return doc.querySelector(".tool-group .tool-group-label")?.textContent ?? null;
 }
 function flatLabel(doc: Document): string | null {
-  return doc.querySelector(".tool-flat")?.textContent ?? null;
+  // The label span only — a command's flat row also carries the #41 details
+  // block (full command text), which is not part of the label.
+  return doc.querySelector(".tool-flat .tool-label")?.textContent ?? null;
 }
 
 describe("tool-call rollup categorization (live, kind present)", () => {

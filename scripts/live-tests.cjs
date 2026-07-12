@@ -589,10 +589,12 @@ async function testPlanMode() {
 
     // ── Phase 1: PLAN (gate up) ──────────────────────────────────────────────
     // grok ≥0.2.91's plan flow is long even when healthy (~4 min: reads its docs,
-    // keeps session-dir state, may delegate to a planning subagent), so give it 6 min.
+    // keeps session-dir state, may delegate to a planning subagent) — real PASSes
+    // have clocked 305-315s, and a slow-backend night tips a 6-min ceiling into a
+    // false FAIL. 10 min keeps the timeout a hang detector, not a latency bet.
     await withTimeout(
       acp.send("session/prompt", { sessionId, prompt: [{ type: "text", text: "Plan how to add a subtract(a,b) function to app.js and a test for it. Produce a detailed plan; do not implement yet." }] }),
-      360000, "plan prompt");
+      600000, "plan prompt");
 
     const upCtx = { active: true, workspaceRoot: cwd, grokHome: GROK_HOME };
     assert(shouldBlockWrite(appPath, upCtx) === true, "plan-gate failed to block an in-workspace write while up");

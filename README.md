@@ -2,11 +2,11 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![VS Code](https://img.shields.io/badge/VS%20Code-Extension-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com) [![Unofficial](https://img.shields.io/badge/Unofficial-community%20%C2%B7%20MIT-FF6B35)](#) [![The Product Compass](https://img.shields.io/badge/The%20Product%20Compass-productcompass.pm-FF6B35)](https://www.productcompass.pm)
 
-> A VS Code UI for **xAI's Grok Build CLI** — not affiliated with or endorsed by xAI. *Grok*, *Grok Build*, and *xAI* are trademarks of xAI; this project uses those names only to describe what it's compatible with.
+> **GUI for Grok Build CLI (incl. Grok 4.5)** — not affiliated with or endorsed by xAI. *Grok*, *Grok Build*, and *xAI* are trademarks of xAI; this project uses those names only to describe what it's compatible with.
 
-Use Grok Build inside a VS Code panel, drop your open files in as `@`-context, keep **resumable chat history**, generate **images & video inline**, and dictate by **voice**. If you'd rather stay in your editor than a terminal, this brings Grok Build's agent into your sidebar.
+The GUI for **Grok Build CLI** (incl. **Grok 4.5**), right in your editor: drop open files in as `@`-context, run **multiple sessions** at once, keep **resumable chat history**, generate **images & video inline**, and dictate by **voice**. If you'd rather stay in VS Code than a terminal, this brings Grok Build's agent into your sidebar.
 
-You install the `grok` CLI once and sign in — with a **SuperGrok or X Premium+ subscription**, or an **xAI API key** — and the extension is the GUI on top.
+No manual setup: the extension **walks you through installing the `grok` CLI and signing in** — with a **SuperGrok or X Premium+ subscription**, or an **xAI API key** — right from the sidebar, one click per step.
 
 **Install free from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn) or [Open VSX Registry](https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn)**
 
@@ -144,7 +144,9 @@ The two-word send phrase is deliberate (it won't fire on a message that merely e
 <details>
 <summary><strong>File chips</strong> — your editor and selection as <code>@file</code> context</summary>
 
-The active editor is added as an **implicit** chip automatically (toggle with `grok.includeActiveFileByDefault`). Drag from the Explorer, right-click → **Grok: Send File**, press **Alt+G**, or use the **+** toolbar button to add **explicit** chips. Chips are sent as `@/path/to/file` references — the CLI resolves them, so content stays current and doesn't bloat chat history. Hold **Shift** while dragging to embed the file's contents inline as a fenced code block instead.
+The active editor rides along automatically as an **implicit** chip (`grok.includeActiveFileByDefault`); add more by dragging from the Explorer, right-click → **Grok: Send File**, **Alt+G**, or the **+** button. Chips send as `@/path` references the CLI resolves — content stays current, history stays small. **Shift-drag** embeds the file inline instead.
+
+![Composer with an image, a file, and a selection chip attached](docs/screenshots/file_chips.png)
 
 </details>
 
@@ -181,9 +183,11 @@ The clock icon lists this project's sessions, newest first. Click a row to resum
 </details>
 
 <details>
-<summary><strong>Tool calls</strong> — every read, edit & command, inline</summary>
+<summary><strong>Tool calls</strong> — every read, edit & command, inline; expand any command for its full output</summary>
 
 Every action Grok takes appears in chat as a **category-iconed** row — a single line, or a batch summarized by what it did ("Explored 5 items", "Edited 2 files") that expands to the full list on click. A tool that **fails** turns red with the reason inline.
+
+**Shell commands go further:** each command row carries a `›` — click it for an **IN/OUT block** with the full command text and the complete captured output (the extension runs the commands itself, so the output is exactly what Grok received). Failures show `[Error] exit N`; `grok.expandCommandOutputs` pre-opens everything for auditing Auto-accept sessions.
 
 ![Tool calls grouped and summarized by category, with icons](docs/screenshots/tool_calls.png)
 
@@ -217,14 +221,18 @@ Click the model name in the gear popover. The model list comes from your CLI; sw
 <details>
 <summary><strong>Reasoning effort</strong> — trade tokens for depth</summary>
 
-Gear icon → effort dots pick a level (`none` → `xhigh`), forwarded to the CLI as `--reasoning-effort`. Changing it restarts the session, with an optional *Summarize & Restart* to carry context forward. (Some subscription tiers may reject effort at the backend.)
+Gear → the effort dots next to the model, `none` → `xhigh`, forwarded to the CLI as `--reasoning-effort`. Changing it restarts the session (optional *Summarize & Restart* carries context forward).
+
+![Model and reasoning-effort picker in the gear menu](docs/screenshots/effort.png)
 
 </details>
 
 <details>
 <summary><strong>Cost control</strong> — token donut, <code>/compact</code> & effort</summary>
 
-Stay on top of spend without leaving the sidebar: the bottom-toolbar **context donut** shows `usedK/maxK` tokens after each prompt (click it for the exact count, and it stays accurate across `/compact` and session restores); **`/compact`** (gear → Compact) compresses the conversation when it fills, or **+** starts fresh. **Reasoning effort** trades tokens for depth, and voice STT cost is called out above.
+The **context donut** tracks usage after every turn — click it for the exact count (accurate across `/compact` and restores). **`/compact`** (gear → Compact conversation) shrinks a full conversation; **+** starts fresh.
+
+![Context donut with the exact token count on click](docs/screenshots/cost_control.png)
 
 </details>
 
@@ -257,6 +265,7 @@ Or edit the config via gear → *Open global / project config*, then click **+**
 | `grok.includeActiveFileByDefault` | `true` | Auto-add the active editor as a context chip. |
 | `grok.useCtrlEnterToSend` | `false` | When true, Enter inserts a newline and Ctrl/Cmd+Enter sends. |
 | `grok.showThinking` | `false` | Show Grok's reasoning (thinking) traces in chat. Off shows a *Thinking…* stand-in. Also toggleable live from gear → Config & debug. |
+| `grok.expandCommandOutputs` | `false` | Pre-expand every command's IN/OUT detail (full command + captured output) — the audit view for Auto-accept sessions. Also toggleable live from gear → Config & debug. |
 | `grok.telemetry.enabled` | `true` | Send anonymous, privacy-first usage telemetry (see [Privacy](#privacy)). Also honors VS Code's global `telemetry.telemetryLevel`. |
 | `grok.chatFontScale` | `100` | Zoom for the chat panel only, as a percent (`150`, `200`, …). Scales the whole chat UI without rescaling the rest of VS Code (unlike `Ctrl/Cmd+Shift+=`). Applies live; supports User (global) and Workspace (local) scope. |
 | `grok.voiceApiKey` | `""` | xAI API key for voice Speech-to-Text — a separate [console.x.ai](https://console.x.ai) developer key, not the CLI login. Empty = fall back to `GROK_VOICE_API_KEY` / `XAI_API_KEY` in the workspace `.env`. |
