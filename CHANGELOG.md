@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.9 — 2026-07-12
+
+### Changed
+
+- Documentation-only patch: the README hero screenshot now shows the current UI running **Grok 4.5** ([docs/screenshots/grok_4.5.png](docs/screenshots/grok_4.5.png), replacing the v1.4.20 shot). No code changes.
+
 ## 1.5.8 — 2026-07-12
 
 ### Fixed

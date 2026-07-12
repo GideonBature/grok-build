@@ -10,7 +10,7 @@ No manual setup: the extension **walks you through installing the `grok` CLI and
 
 **Install free from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn) or [Open VSX Registry](https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn)**
 
-![Grok Build in the VS Code sidebar](docs/screenshots/v1.4.20.png)
+![Grok Build in the VS Code sidebar, running Grok 4.5](docs/screenshots/grok_4.5.png)
 
 ![Generated image rendered inline from /imagine](docs/screenshots/imagine.png)
 

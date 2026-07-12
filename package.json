@@ -2,7 +2,7 @@
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build for VS Code (Community)",
   "description": "GUI for Grok Build CLI (incl. Grok 4.5). Voice control, multiple sessions, images and videos, Mermaid diagrams, and LaTeX. Works with SuperGrok, X Premium+, and xAI API key. MIT, open-source. Not affiliated with or endorsed by xAI.",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
