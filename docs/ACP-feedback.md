@@ -21,6 +21,7 @@ was made against; a section without a date here predates this log and is covered
 |---|---|---|
 | **2026-07-15** | **0.2.101** | **§2.1 — the headline defect is FIXED.** A rejection of `x.ai/exit_plan_mode` is now honored. **One new, still-open hole:** plan mode gates the *edit* tool but **not** `terminal/create`, so a shell command can mutate the workspace during planning. |
 | **2026-07-15** | **0.2.101** | **§2.10 (new) — edit diffs.** Three asks: every edit reports its diff **twice** and the first can be wrong (an overwriting Write's echo claims `oldText:""`); the echo, the completed update, and the session/load replay each carry a **different `_meta` shape**; and `details[]` has `line_prefix` but no `line_suffix`, so the changed line can't be reconstructed. *(Raised and **withdrawn** the same day: "a replace-all under-describes the change" — `_meta.details[]` does enumerate every site, 12/12 with exact line numbers. That was our client gap, not a CLI defect.)* |
+| **2026-07-15** | **0.2.99–0.2.101** | **§2.11 (new) — permission requests are environment-dependent, not configuration-dependent.** The same build + settings sends **zero** `session/request_permission` for an in-workspace edit on some Windows 11 hosts, while prompting reliably on macOS / a Win 11 Azure VM. User-reported ([#49](https://github.com/phuryn/grok-build-vscode/issues/49)); no client-side fix can restore the missing approval step. |
 | **2026-07-13** | *not recorded* | **§2.9 (new) — terminal commands** (issue #46, extension v1.5.13). The agent emits POSIX-subshell idioms against a PowerShell host, and the two agent families use different command-execution models. |
 | **2026-07-11** | **0.2.93** | **§5 — Grok 4.5 verification.** Every grok-build-family finding re-verified against Grok 4.5; Composer 2.5 re-verified alongside. |
 
@@ -333,6 +334,38 @@ This is everything a client needs to render a real gutter. Three notes:
 
 **Ask:** send one authoritative diff, or mark the echo as provisional so a client can tell the two
 apart.
+
+### 2.11 Permission requests are environment-dependent, not configuration-dependent
+(observed 2026-07-15 on grok 0.2.99–0.2.101; user report:
+[grok-build-vscode#49](https://github.com/phuryn/grok-build-vscode/issues/49);
+`research/edit-diff.md` § "The permission-card red herring")
+
+**Whether `grok agent stdio` sends `session/request_permission` for an in-workspace edit varies by
+machine, not by configuration.** On some Windows 11 hosts — including our primary dev box — it sends
+**zero** permission requests for an in-workspace edit with `permission_mode = "ask"`, `yolo = false`,
+`support_permission` either value, **and even a pristine default config** (probe reproduced with the
+extension's exact `initialize` handshake). The *same extension build with the same settings* prompts
+reliably on macOS and on a Windows 11 Azure VM for the same edit. It is unaffected by the client's
+own Auto-accept state, and by every Grok setting we can find.
+
+This reaches users as a trust problem, not a papercut. Verbatim from #49:
+
+> *"Grok simply edits all my files without any confirmation. There is also no option for me to
+> review what changed."*
+
+A client cannot build an approval UX on a signal that may silently never arrive, and cannot explain
+to the user why their machine disagrees with the documentation.
+
+Our workaround **decouples review from permission entirely**: the `type:"diff"` block rides
+`tool_call_update` regardless of permission mode (§2.10), so we render every edit's diff inline from
+the wire and never depend on a card appearing. That solves *review* — it cannot restore *approval*.
+If no request arrives, there is nothing for the user to approve, and no client-side code can
+manufacture the choice.
+
+**Ask:** make permission requests deterministic and configuration-driven across platforms, or
+document exactly what governs them — and surface the effective state over ACP (§2.7). If some
+host/build legitimately suppresses them, say so in `initialize` so a client can tell the user
+instead of looking broken.
 
 ---
 
