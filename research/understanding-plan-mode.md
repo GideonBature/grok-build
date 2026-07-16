@@ -1,5 +1,14 @@
 # Understanding Plan Mode in Grok Build (VS Code Extension) — Course
 
+> **Update (grok 0.2.101):** the "exit_plan_mode treats ANY response as approval"
+> CLI bug this doc rests on is **FIXED** — a success `{outcome:"cancelled"}` now
+> rejects a plan. The extension nonetheless still ships the primer + client-side
+> gate, because plan mode's gate rejects the *edit* tool but still passes
+> `terminal/create` through (the terminal hole is confirmed present at HEAD). So
+> the gate is load-bearing for a different reason now. See
+> `research/plan-mode-recheck-findings.md` and `research/grok-build-oss-findings.md`
+> §2.1. Inline `src/*.ts` line refs below have drifted (self-noted) — trust the code.
+
 > **Goal of this course**: After completing this material you will have a correct mental model of *why* Plan mode exists, *how* it actually works (the client-side "B+" architecture), and *what* happens on every user action (Approve / Keep planning / Cancel). You will be able to predict behavior, debug surprising states, and explain the design to others.
 
 This is the official **course** companion to the raw research notes in [research/plan-mode.md](plan-mode.md). Work through the sections in order for understanding; treat the research notes as the historical source of truth and reference for deep technical details and probe results.

@@ -111,14 +111,20 @@ still causes secondary problems (see 2.6).
 command is a write. ~~Optionally, add an explicit rejection outcome so a reject isn't reported to
 the model as a tool failure.~~ *(Withdrawn 2026-07-16 — the outcome exists; see below.)*
 
-**Source-verified (2026-07-16, OSS tree).** The terminal hole is confirmed at HEAD, and it is one
-function: `plan_mode_edit_gate` (`xai-grok-shell/src/session/acp_session_impl/tool_calls.rs:166-181`)
+**Source-verified (2026-07-16, OSS tree).** The terminal hole is confirmed at HEAD:
+`plan_mode_edit_gate` (`xai-grok-shell/src/session/acp_session_impl/tool_calls.rs:150,166-181`)
 rejects only `AccessKind::Edit(..)`; `AccessKind::Bash` falls through to `Allow`, and the function's
 own doc-comment says bash/MCP/web are never gated there. The caller (`:893-907`) already maps any
-non-`Allow` verdict to a rejection message before dispatch, so the fix is adding a rejecting arm for
-`AccessKind::Bash(_)` (which covers both `run_terminal_command` and `Monitor` per
-`xai-grok-workspace/src/permission/types.rs:266-267`) — ~10–15 lines plus tests in
-`acp_session_tests/plan_mode_edit_gate_tests.rs`.
+non-`Allow` verdict to a rejection message before dispatch, so the gate is the single choke point to
+extend. **But the fix is a policy decision, not a one-line arm** (thanks to peer review for the
+nudge): a blanket `AccessKind::Bash(_)` rejection would also block *read-only* shell inspection
+(`ls`, `git status`, `cat`) that plan mode arguably should permit — grok already classifies a
+read-only-command allowlist elsewhere (§2.11), so the natural design is to allow classified
+read-only commands and reject the rest. And `Bash` isn't the whole surface: MCP tools and
+`WebFetch`/`WebSearch` can have side effects too, so "a shell command is a write" understates it —
+the real question is *which* non-edit tools may run during planning. **Ask:** define and enforce a
+plan-mode tool policy (read-only shell + read-only MCP/web permitted; everything mutating blocked at
+the same gate), not just an edit-tool block.
 
 **The rejection-outcome ask is withdrawn — it already exists, and the error path we used was our
 client gap.** The intended reply to `x.ai/exit_plan_mode` is a JSON-RPC **success** carrying
@@ -214,28 +220,35 @@ of `0`.
 **Ask:** transmit the lifecycle events; make "completed" mean completed; keep the envelope out
 of the text block (the structured `rawOutput` is enough); put `x.ai/tool` meta on every call.
 
-**Source-verified (2026-07-16, OSS tree) — major correction to the first bullet.** The lifecycle
-events **are pushed live at HEAD; they ride a different method than the one we watched.** There are
-two rails: `_x.ai/session/update` is only the **persist** tag in `updates.jsonl`
-(`xai-grok-shell/src/session/storage/mod.rs:96,156`), re-forwarded on `session/load` re-tagged
-`x.ai/session/update` (`agent/mvp_agent/mod.rs:1307-1351`) and never pushed live; the **live** rail
-is **`x.ai/session_notification`**, emitted unconditionally (no capability/config gate) by
-`emit_subagent_notification` (`agent/subagent/mod.rs:2216-2242`) and `send_xai_notification`
-(`session/acp_session_impl/updates.rs:701-744`). `SubagentFinished` carries `duration_ms`,
-`tokens_used`, `output`, `will_wake` (`extensions/notification.rs:629-657`). Our "never
-transmitted" measurement counted arrivals of the persist-rail method; we are re-verifying the live
-rail against shipped builds and wiring it up. The reframed ask: **document the two rails** —
-nothing over ACP hints that `x.ai/session_notification` exists.
+**Source-verified (2026-07-16, OSS tree; probe-confirmed on 0.2.101) — major correction to the
+first bullet.** The lifecycle events **are pushed live; they ride a different METHOD than the one
+our UI watches.** There are two rails, and — to be precise — **both are `_`-prefixed on the wire**
+(every x.ai extension method is; the `agent-client-protocol` decoder only routes a `_`-prefixed
+method to `ext_method`, and the bare `x.ai/...` name is just the internal logical name the Rust
+router matches after the decoder strips the `_`). The rails differ by method, not by prefix:
+- **`_x.ai/session_notification`** — the **live** lifecycle envelope, emitted unconditionally by
+  `send_xai_notification` (`session/acp_session_impl/updates.rs:701-744`) and
+  `emit_subagent_notification` (`agent/subagent/mod.rs:2216-2242`). Carries `SubagentFinished`
+  (`duration_ms`, `tokens_used`, `output`, `will_wake`; `extensions/notification.rs:629-657`),
+  `auto_compact_completed`, `turn_completed`, `image_dropped`. **Probe-observed live on 0.2.101.**
+- **`_x.ai/session/update`** — the **persist/replay** records in `updates.jsonl`
+  (`storage/mod.rs:92`), re-forwarded on `session/load` (`agent/mvp_agent/mod.rs:1307-1351`).
+
+Our "never transmitted" measurement (0.2.93) watched the persist rail's method; the lifecycle
+actually rides `session_notification`, which our client receives but our subagent UI ignores. The
+reframed ask: **advertise/document the two rails** — nothing in `initialize` hints they exist.
 
 The other bullets, now cited: the instant background "completed" is structural — the
 `run_in_background` branch returns `Ok(ToolOutput::Text("Subagent started in background…"))`
-synchronously (`xai-grok-tools/src/implementations/grok_build/task/mod.rs:328-368`); the envelope
-is built at `xai-tool-types/src/task.rs:276-313` (the older "This is the output of the subagent:" /
+synchronously (`xai-grok-tools/src/implementations/grok_build/task/mod.rs:328-368`); the completed
+envelope (`<subagent_meta>` / `<subagent_result>`) is built in the tool-output layer — the
+per-poll form at `task_output/mod.rs:581` (the older "This is the output of the subagent:" /
 "Agent ID:" wrap survives only as a legacy *parser*, `reminders/task_completion.rs:522-544`);
 `x.ai/tool` stamping happens in `stamp_tool_meta` (`tool_calls.rs:260-274`) and skips unresolved
 wire names — uninitialized MCP and backend-hosted tools (`normalization.rs:27-41`); and
-`session_kind` **is** exposed over ACP as `sessionKind` in the `x.ai/session/list` row `_meta`
-(`session/unified_list/row.rs:18-53`) — see §2.6.
+`session_kind` **is** exposed over ACP as a **top-level `sessionKind`** field on each
+`_x.ai/session/list` row (`session/unified_list/row.rs:123`, flattened — NOT in `_meta`, where
+`_meta["x.ai/session"].kind` is only the coarse `build`/`chat` class) — see §2.6.
 
 ### 2.5 Capabilities and media: the flags don't match reality
 - `initialize` advertises `promptCapabilities.image: false`, but inline `{type:"image"}`
@@ -308,15 +321,21 @@ Most of this section is downstream of the primer, which is downstream of 2.1.
 metadata such as title, updated time, workspace, model, agent type, and session kind. Keep
 restore replay free of internal protocol messages and include resolved interaction state.
 
-**Source-verified (2026-07-16, OSS tree) — the catalog operations already exist, unadvertised.**
-The ext-method router (`xai-grok-shell/src/agent/mvp_agent/acp_agent.rs:3164-3508`) dispatches
-`x.ai/session/list` + `x.ai/sessions/list` (`:3168`), `x.ai/session/search` (`:3181` — the SQLite
-FTS index behind `grok sessions search`), `x.ai/session/rename`, `x.ai/session/delete`,
-`x.ai/session/fork` (`:3189`, `extensions/session_admin.rs`), plus `session/info`, `session/close`,
-`session/load_history` — unconditionally, with no feature gate; list rows carry `sessionKind` in
-item `_meta` (`session/unified_list/row.rs:18-53`). The headline ask therefore reduces to:
-**advertise/document these methods** (`initialize` hints at none of them), and we are adopting them
-directly. Related root causes, now pinned:
+**Source-verified (2026-07-16, OSS tree; probe-confirmed on 0.2.101) — the catalog operations
+already exist, unadvertised, AND ship.** The ext-method router
+(`xai-grok-shell/src/agent/mvp_agent/acp_agent.rs:3164-3508`) dispatches `_x.ai/session/list` +
+`_x.ai/sessions/list` (`:3168`), `_x.ai/session/search` (`:3181` — the SQLite FTS index behind
+`grok sessions search`), `_x.ai/session/rename`, `_x.ai/session/delete`, `_x.ai/session/fork`
+(`:3189`, `extensions/session_admin.rs`), plus `_x.ai/session/info`, `_x.ai/session/close`,
+`_x.ai/session/load_history` — unconditionally, no feature gate. **Wire form is `_`-prefixed**
+(`_x.ai/session/list`); a bare `x.ai/...` is rejected `-32601` at the decoder before the router
+runs, so it advertises nothing about whether the RPC exists. A live probe against 0.2.101 confirms
+they work: `_x.ai/session/rename` → `{success:true}`, `_x.ai/session/delete` removed the session
+dir. `list` returns **`{ sessions, nextCursor, _meta }`** (`unified_list/mod.rs:298`), and
+`sessionKind` is a **top-level flattened row field** (`row.rs:123`), *not* in `_meta` (there,
+`_meta["x.ai/session"].kind` is only the coarse `build`/`chat` class). The headline ask therefore
+reduces to: **advertise/document these methods** (`initialize` hints at none of them), and we are
+adopting them directly. Related root causes, now pinned:
 
 - **Versioned `set_model` echo:** the echo returns the catalog *entry's* `.model` while
   `availableModels` ids are the catalog *keys* (`handlers/model_switch.rs:231-235`;
@@ -373,8 +392,13 @@ which makes surfacing the *effective* policy (and its source file) more importan
   strings in the binary. Documentation would have saved a probe.
 
 **2026-07-16:** with the source public, the documentation asks here are largely satisfied by
-reading it — the `x.ai/`-vs-`_x.ai/` prefix duality is now explained (live rail vs persist rail,
-§2.4), and the `ask_user_question` / `exit_plan_mode` response schemas live in
+reading it. The `_x.ai/` prefix convention is now clear: **every** x.ai extension method is
+`_`-prefixed on the wire, and the ACP decoder rejects a bare `x.ai/...` with `-32601` before the
+router runs (`xai-grok-shell/src/agent/app.rs`) — so a client MUST send `_x.ai/session/list`, not
+`x.ai/session/list` (a lesson we learned the hard way: a first probe used bare methods and
+mis-concluded the session RPCs were unshipped). The two session rails are distinguished by method
+(`session_notification` vs `session/update`), not by prefix (§2.4). The `ask_user_question` /
+`exit_plan_mode` response schemas live in
 `xai-grok-tools/src/implementations/grok_build/*/types.rs`. The stdin-regression and
 process-tree-lock items remain as-is (historical).
 
@@ -565,13 +589,17 @@ pattern-less rule matches every path, `policy.rs:227`). Any of these short-circu
 
 We then checked the dev box from this section's A/B — the machine that never prompts — and its
 `~/.claude/settings.json` contains bare `"Edit"`, `"Write"`, and `"Bash"` entries in
-`permissions.allow`, granted to *Claude Code* months earlier. That alone explains #49: allow rules
-a user gave one product silently auto-approve another product's writes, with no indication
-anywhere. The macOS box and Azure VM had no such file. Secondary machine-local inputs on the same
-path: persisted per-project grants (`~/.grok/sessions/<cwd>/permission.toml`, `manager.rs:935`),
-the `[claude_compat].imported` cutoff that disables the whole `.claude` fallback
-(`claude_settings.rs:512-554`), and managed `requirements.toml`/`managed-settings.json` layers.
-(`defaultMode: "dontAsk"` produces the opposite failure — auto-deny, `manager.rs:1476-1484`.)
+`permissions.allow`, granted to *Claude Code* months earlier: allow rules a user gave one product
+silently auto-approve another product's writes, with no indication anywhere. The macOS box and Azure
+VM had no such file. **This is not the whole of #49, though — the symptom has multiple invisible
+sources.** The `.claude` merge explains *our dev box*; the #49 reporter's own case was different —
+they had auto-approval persisted for one workspace in grok's per-project
+`~/.grok/sessions/<cwd>/permission.toml` (`manager.rs:935`), and a fresh folder prompted normally.
+The honest framing: **several invisible policy sources produce the same "no approval card" symptom**
+— the `.claude` fallback, per-project `permission.toml` grants, the `[claude_compat].imported`
+cutoff that disables the whole `.claude` fallback (`claude_settings.rs:512-554`), and managed
+`requirements.toml`/`managed-settings.json` layers — none surfaced over ACP. (`defaultMode:
+"dontAsk"` produces the opposite failure — auto-deny, `manager.rs:1476-1484`.)
 
 This resolves the mystery but sharpens the ask: **the merge is invisible.** Nothing over ACP — or
 in grok's own output — tells a client or a user that a `.claude` file from another product is

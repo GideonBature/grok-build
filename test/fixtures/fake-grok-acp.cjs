@@ -84,7 +84,21 @@ rl.on("line", async (line) => {
     case "session/new":
       return respondOk(id, {
         sessionId: SESSION_ID,
-        models: { currentModelId: "fake-model", availableModels: [] },
+        models: {
+          currentModelId: "fake-model",
+          // Advertise per-session reasoning effort so the client's live-effort
+          // gate (currentModelSupportsEffort) can be exercised; reasoningEffort is
+          // the ACTIVE session override the client seeds currentReasoningEffort from.
+          availableModels: [{
+            modelId: "fake-model",
+            name: "Fake",
+            _meta: {
+              supportsReasoningEffort: true,
+              reasoningEffort: "high",
+              reasoningEfforts: [{ value: "high" }, { value: "medium" }, { value: "low" }],
+            },
+          }],
+        },
         modes: { currentModeId: "default", availableModes: [{ id: "default", name: "Agent" }, { id: "plan", name: "Plan" }] },
       });
     case "session/load":
@@ -92,8 +106,22 @@ rl.on("line", async (line) => {
         models: { currentModelId: "fake-model", availableModels: [] },
         modes: { currentModeId: "default", availableModes: [] },
       });
-    case "session/set_model":
+    case "session/set_model": {
+      // Echo the received _meta so a test can assert the client sent
+      // reasoningEffort on a live effort switch.
+      process.stderr.write(`SET_MODEL: ${JSON.stringify({ modelId: params.modelId, _meta: params._meta })}\n`);
+      // Mirror real grok: broadcast model_changed with the EFFECTIVE effort
+      // BEFORE the response — the authoritative signal the client's effort state
+      // syncs from (acp.ts session_notification handler).
+      const eff = params._meta && params._meta.reasoningEffort;
+      if (eff) {
+        notify("_x.ai/session_notification", {
+          sessionId: SESSION_ID,
+          update: { sessionUpdate: "model_changed", model_id: params.modelId, reasoning_effort: eff },
+        });
+      }
       return respondOk(id, { _meta: { model: { Ok: params.modelId } } });
+    }
     case "session/set_mode":
       return respondOk(id, {});
     case "session/cancel":
@@ -190,6 +218,21 @@ async function runScenario(promptId, text, params) {
       });
       process.stderr.write(`ASK_RESPONSE: ${JSON.stringify(askResp)}\n`);
       respondOk(promptId, { stopReason: "end_turn", _meta: { totalTokens: 50 } });
+      return;
+    }
+
+    if (text.includes("SCENARIO_COMPACT_NOTIFY")) {
+      // grok emits the fresh post-compact context size on the LIVE
+      // `_x.ai/session_notification` rail (auto_compact_completed.tokens_after),
+      // as a no-id notification. The compact turn's own meta still reports 0
+      // (stripped host-side). Shape captured from grok 0.2.101
+      // (research/oss-surfaces-probe.cjs).
+      notify("_x.ai/session_notification", {
+        sessionId: SESSION_ID,
+        update: { sessionUpdate: "auto_compact_completed", tokens_before: 20000, tokens_after: 12345, summary_preview: null },
+      });
+      notify("session/update", { sessionId: SESSION_ID, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "(compacted)" } } });
+      respondOk(promptId, { stopReason: "end_turn", _meta: { totalTokens: 0 } });
       return;
     }
 

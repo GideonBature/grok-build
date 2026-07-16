@@ -25,6 +25,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import { AcpClient } from "../src/acp";
+import { contextUsedFromCompactNotification } from "../src/acp-dispatch";
 
 function fixtureCli(): string {
   const dir = path.join(__dirname, "fixtures");
@@ -151,6 +152,41 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     ]);
     // The fake CLI echoes what it actually received: count, mimes, non-empty data.
     expect(chunks.join("")).toContain("vision:2:image/png,image/jpeg:true");
+  });
+
+  it("compact: auto_compact_completed on the _x.ai/session_notification rail surfaces as xaiNotification with tokens_after", async () => {
+    const notes = collect<{ sessionUpdate?: string; tokens_after?: number }>(client, "xaiNotification");
+    await client.prompt("SCENARIO_COMPACT_NOTIFY");
+    const compact = notes.find((u) => u?.sessionUpdate === "auto_compact_completed");
+    expect(compact).toBeDefined();
+    expect(compact?.tokens_after).toBe(12345);
+    // The host derives the donut's fresh `used` from exactly this payload.
+    expect(contextUsedFromCompactNotification(compact)).toBe(12345);
+  });
+
+  it("effort: setReasoningEffort sends set_model with _meta.reasoningEffort live (no restart), gated on the advertised capability", async () => {
+    expect(client.currentModelSupportsEffort()).toBe(true); // fake model advertises it
+    // Seeded from the advertised ACTIVE session effort (not the spawn default).
+    expect(client.currentReasoningEffort).toBe("high");
+    const applied = await client.setReasoningEffort("low");
+    expect(applied).toBe(true);
+    expect(client.currentReasoningEffort).toBe("low"); // updated on success
+    await new Promise((r) => setTimeout(r, 150)); // let the fake's stderr echo flush
+    const line = stderr.find((t) => t.includes("SET_MODEL:"));
+    expect(line).toBeDefined();
+    expect(line).toContain('"reasoningEffort":"low"');
+    // Empty effort ("unset") is not expressible as a live override — must not fire a set_model.
+    expect(await client.setReasoningEffort("")).toBe(false);
+  });
+
+  it("effort: a live override is CARRIED through a subsequent model switch (not dropped)", async () => {
+    await client.setReasoningEffort("low");
+    stderr.length = 0; // ignore the setReasoningEffort echo
+    await client.setModel("fake-model");
+    await new Promise((r) => setTimeout(r, 150));
+    const line = stderr.find((t) => t.includes("SET_MODEL:"));
+    expect(line).toBeDefined();
+    expect(line).toContain('"reasoningEffort":"low"'); // switch re-sends the override
   });
 
   it("startup: a valid default effort is forwarded as --reasoning-effort before stdio", async () => {

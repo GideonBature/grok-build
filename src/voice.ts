@@ -29,16 +29,72 @@ export interface SttResult {
   words?: SttWord[];
 }
 
+const AUTH_EXPIRY_SKEW_MS = 60_000; // refuse a token within a minute of expiry
+
+/** Parse an `expires_at` (number, numeric-string, or ISO/date string) to epoch
+ *  ms, tolerating seconds- vs ms-epoch. Null when absent or unparseable. */
+function parseAuthExpiryMs(raw: unknown): number | null {
+  if (raw == null) return null;
+  let n: number;
+  if (typeof raw === "number") n = raw;
+  else {
+    const str = String(raw).trim();
+    // A bare numeric string ("1700000000") is an epoch, NOT a date — Date.parse
+    // returns NaN for it in Node, which would read as "never expires" (#51/Codex).
+    n = /^\d+(\.\d+)?$/.test(str) ? Number(str) : Date.parse(str);
+  }
+  if (!Number.isFinite(n)) return null;
+  return n < 1e12 ? n * 1000 : n; // < ~2001 in ms ⇒ it was seconds-epoch
+}
+
+/** True when the top-level auth.json entry key (`<issuer-url>::<uuid>`) is an
+ *  xAI issuer — so we never forward some unrelated `.key` to xAI's STT endpoint. */
+function isXaiIssuerKey(topKey: string): boolean {
+  const issuer = String(topKey).split("::")[0];
+  try {
+    const host = new URL(issuer).host.toLowerCase();
+    return host === "x.ai" || host.endsWith(".x.ai");
+  } catch { return false; }
+}
+
+/**
+ * Pull the reusable API token the grok CLI stores after `grok login`, from the
+ * text of `~/.grok/auth.json` — the same value a user can paste into the Voice
+ * key field (confirmed working for STT, #51). The file is an object keyed by an
+ * `<issuer-url>::<uuid>`; each entry carries a `key` (the token) and an optional
+ * `expires_at`. Only xAI-issued entries are considered, and a KNOWN-expired
+ * token is refused (returns undefined) so the mic doesn't look configured then
+ * 401 mid-recording — a token with an absent/unparseable expiry is still used.
+ * Pure; `now` is injectable for tests. Undefined on parse failure or when no
+ * usable, non-expired xAI entry exists.
+ */
+export function extractGrokAuthKey(authJsonText: string, now: number = Date.now()): string | undefined {
+  let obj: any;
+  try { obj = JSON.parse(authJsonText); } catch { return undefined; }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return undefined;
+  const keyOf = (e: any): string => (e && typeof e.key === "string" ? e.key.trim() : "");
+  const notExpired = (e: any): boolean => {
+    const ms = parseAuthExpiryMs(e?.expires_at);
+    return ms == null || ms - AUTH_EXPIRY_SKEW_MS > now; // absent/unparseable ⇒ try it
+  };
+  const chosen = Object.entries(obj)
+    .filter(([topKey, e]) => isXaiIssuerKey(topKey) && keyOf(e) && notExpired(e))
+    .map(([, e]) => e)[0];
+  return chosen ? keyOf(chosen) : undefined;
+}
+
 /**
  * Resolve the xAI key used for Speech-to-Text. Order: the explicit
- * `grok.voiceApiKey` setting wins; otherwise fall back to env vars (the caller
- * passes a map that should layer workspace .env over process.env). A dedicated
- * `GROK_VOICE_API_KEY` is preferred over the generic `XAI_API_KEY` so a
- * voice-only key can be kept separate from the CLI's own key mapping.
+ * `grok.voiceApiKey` setting wins; then env vars (the caller passes a map that
+ * layers workspace .env over process.env — a dedicated `GROK_VOICE_API_KEY` is
+ * preferred over the generic `XAI_API_KEY`); finally `authKey`, the token the
+ * CLI stored at `grok login` (`~/.grok/auth.json`, via `extractGrokAuthKey`), so
+ * Voice works without a separate paid key (#51).
  */
 export function resolveVoiceKey(opts: {
   setting?: string;
   env?: Record<string, string | undefined>;
+  authKey?: string;
 }): string | undefined {
   const setting = (opts.setting || "").trim();
   if (setting) return setting;
@@ -47,6 +103,8 @@ export function resolveVoiceKey(opts: {
     const v = (env[name] || "").trim();
     if (v) return v;
   }
+  const authKey = (opts.authKey || "").trim();
+  if (authKey) return authKey;
   return undefined;
 }
 
@@ -203,7 +261,7 @@ export function parseSttResponse(json: any): SttResult {
 /** Map an STT HTTP failure to a message worth showing the user. */
 export function classifySttError(status: number, body?: string): string {
   if (status === 401 || status === 403) {
-    return "Voice transcription was rejected (401/403): the xAI API key is missing or invalid. Set grok.voiceApiKey, or GROK_VOICE_API_KEY / XAI_API_KEY in your workspace .env (get a key at console.x.ai).";
+    return "Voice transcription was rejected (401/403): the xAI key is missing, invalid, or expired. If you're relying on your `grok login`, try signing in again (`grok logout` then `grok login`); or set grok.voiceApiKey, or GROK_VOICE_API_KEY / XAI_API_KEY in your workspace .env (get a key at console.x.ai).";
   }
   if (status === 429) return "Voice transcription is rate-limited (429). Wait a moment and try again.";
   if (status === 413) return "The recording is too large to transcribe (413). Record a shorter message.";

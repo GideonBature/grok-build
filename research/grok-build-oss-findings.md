@@ -15,6 +15,75 @@ below are relative to `C:\github\grok-build-CLI\crates\codegen\`.
 
 ---
 
+## Probe results — shipped grok 0.2.101 stable (2026-07-16)
+
+Run via `research/oss-surfaces-probe.cjs` against the installed binary. **The OSS tree is genuinely
+ahead of shipped**, so the gate earned its keep — one surface we were about to adopt does not exist
+yet on the real CLI.
+
+> **Correction (2026-07-16, after Codex peer-review + re-probe):** the session-RPC row below was initially marked "not shipped" — that was a **probe bug**, not a CLI fact. ACP extension methods must be **`_`-prefixed on the wire** (`_x.ai/session/list`): the `agent-client-protocol` decoder routes a custom method to `ext_method` only when it carries the `_` prefix and rejects a bare `x.ai/...` with `-32601 method_not_found` **at decode**, before the router runs (source: `xai-grok-shell/src/agent/app.rs` comment). The first probe sent bare methods. Re-run with `_x.ai/...`: **the RPCs work on 0.2.101** — `rename` → `{success:true}`, `delete` → removed the session dir, `list`/`info` → OK. Verdict flipped to ✅ below.
+
+| Surface | Shipped 0.2.101 | Verdict |
+|---|---|---|
+| §2.6 session RPCs (`_x.ai/session/{list,info,rename,delete,fork}`) | ✅ **shipped** (unadvertised) — `_`-prefixed on the wire; `rename`→`{success:true}`, `delete` removed the dir, `list` returns `{sessions[],nextCursor}` with `sessionKind` a **top-level** row field | ✅ **adoptable now** — can replace disk-scraping for rename/delete/list; probe the `list`/`info` response shapes fully before wiring |
+| §2.7 reasoning effort via `set_model` `_meta.reasoningEffort` | ✅ OK, no error; `session/new` `models[]._meta` advertises `reasoningEffort:"high"`, `supportsReasoningEffort:true`, full `reasoningEfforts` list | ✅ **implement** — drop the process-restart on effort change |
+| §2.3/2.4/2.5 live rail | ✅ present as **`_x.ai/session_notification`** (underscore) — carries `auto_compact_completed{tokens_after}`, `subagent_spawned`/`subagent_progress`/`subagent_finished{duration_ms,tokens_used,output,will_wake}`, `turn_completed`, `session_summary_generated`, `image_dropped{notes}` | ✅ **implement** — we already *receive* it (`acp.ts:655` → `xaiNotification`) but don't consume the kinds |
+| §2.1 plan verdict via success `{outcome:"cancelled"}` | ✅ mode stays `[plan]`, model reads it as "revise" not a tool failure, turn ends `end_turn` | ✅ **implement** — replace the JSON-RPC-error reject |
+| §2.6 primer → `session/new` `_meta.rules` | ✅ injected rule reached the model (nonce echoed verbatim) | ✅ **implement** (larger change) |
+| §2.9 `GROK_SHELL` env at spawn | ✅ sets the model's first-message `Shell:` line (`powershell`/`bash`/`cmd.exe`; unset → host-detected `powershell`) | ✅ **implement** (small) |
+
+Pure client-side, needing no probe: **§2.5 media `rawOutput.path`** parsing and **§2.11 permissions
+honesty** (note: issue #49 is **CLOSED** — the reporter had auto-approval enabled for one workspace
+via grok's per-project `permission.toml`, another machine-local input; so this is a nice-to-have,
+not an open ticket).
+
+**Two live rails, both `_`-prefixed on the wire (corrected framing, Codex review).** It is NOT a
+"`_x.ai` = persist / `x.ai` = live" prefix duality — ALL x.ai extension methods are `_`-prefixed on
+the wire; the bare `x.ai/...` name is only the *internal logical* name the Rust router matches after
+the decoder strips the `_`. The two rails differ by METHOD, not prefix:
+- **`_x.ai/session_notification`** — the live lifecycle envelope (`updates.rs:701`): carries
+  `auto_compact_completed`, `subagent_spawned/progress/finished`, `turn_completed`,
+  `session_summary_generated`, `image_dropped`. **`acp.ts:654-661` already receives it** → emits
+  `xaiNotification`.
+- **`_x.ai/session/update`** — persisted ACP update records (`storage/mod.rs:92`), replayed on
+  `session/load`. `acp.ts:670-682` routes it to `subagentLifecycle`.
+
+**The §2.4 gap is downstream, not a wrong method.** The `subagent_*` kinds arrive on the
+`session_notification` envelope → `xaiNotification`, but our subagent UI waits on `subagentLifecycle`
+(fed by `session/update`), and the `xaiNotification` consumer (`sidebar.ts:1619`) forwards to the
+webview without acting on `auto_compact_completed` / `subagent_*` / `image_dropped` (v1.6.1 consumes
+only `auto_compact_completed`). Wiring exists; consumption beyond the compact donut doesn't.
+
+### Already true on the shipped CLI today (grok 0.2.101) — ready to adopt, no xAI change needed
+
+These are confirmed *available now*; the only work is wiring them into the extension. None waits on an upstream fix:
+
+- **Reasoning effort is live-settable per session** — `session/set_model` accepts `_meta.reasoningEffort` (`"none"|"minimal"|"low"|"medium"|"high"|"xhigh"`) and applies it without a process restart; `session/new` already reports the current effort + full effort list in `models[]._meta`. (We still kill/restart the process on effort change — that restart is now removable.)
+- **The live event rail is already flowing** — `_x.ai/session_notification` delivers `auto_compact_completed`, `subagent_spawned/progress/finished` (with `duration_ms`/`tokens_used`/`output`), `turn_completed` (per-turn billing usage), and `image_dropped` (the first four probe-observed; `image_dropped` source-confirmed). The extension already receives it; only the compact-donut kind is consumed so far (v1.6.1).
+- **Session RPCs are shipped (unadvertised)** — `_x.ai/session/{list,info,rename,delete,fork}` work on 0.2.101 (`rename`→`{success:true}`, `delete` removed the dir). They can replace the disk-scraping catalog for rename/delete/list.
+- **Plan verdicts have a real semantic reply** — replying to `x.ai/exit_plan_mode` with a success `{outcome:"cancelled"|"abandoned"|"approved"}` is honored (mode stays `[plan]` on cancel; the model treats it as "revise", not a tool failure). We currently send a JSON-RPC error, which the CLI reads as a client disconnect.
+- **The model's shell dialect is steerable** — setting `GROK_SHELL` in the agent's spawn env (`pwsh`/`powershell`/`bash`/`cmd`) sets the model's `Shell:` hint directly.
+- **System-prompt injection is sanctioned** — `session/new` `_meta.rules` reaches the model verbatim (the home our plan-mode primer should move to).
+- **Generated media carries a typed path** — the completed tool result includes `rawOutput` with a typed `path`, cleaner than parsing the JSON/prose text (and free of the Windows `\\?\` noise).
+
+**Implementation status (v1.6.1, in progress):**
+
+*Done + tested (grok-free suite, 932):*
+- ✅ **`auto_compact_completed` → context donut** (retires the hidden `/session-info` scrape; kept as a pre-rail fallback).
+- ✅ **Subagent lifecycle from the live rail** — `isSubagentLifecycleUpdate` re-routes `subagent_spawned/finished` from `xaiNotification` to the webview's existing `subagentUpdate` cards (real `duration_ms` + output, incl. Composer).
+- ✅ **Live reasoning-effort switch** — `set_model` `_meta.reasoningEffort`, gated on the model's advertised `supportsReasoningEffort`; restart fallback for old CLIs / unset.
+- ✅ **`GROK_SHELL` at spawn** — `grokShellEnvValue` aligns the model's shell dialect with the shell we run.
+
+*Deliberately deferred (with reasons — a judgment call, not blocked):*
+- ⏸ **Session RPCs adoption** (`_x.ai/session/{rename,delete,list}`) — confirmed shipped, but **unadvertised** (could change), the disk-scraping catalog is robust, rename would fight the `customName` override system, and delete-of-an-arbitrary-history-id is unprobed. Adopt when advertised/stable, or if disk-scraping becomes a real problem.
+- ⏸ **Plan verdict `{outcome:"cancelled"}`** — mechanism is probe-confirmed, but our verdict UX is driven by the primer + `[Plan …]` markers + client-side gate, and plan-mode enforcement is in flux CLI-side (§2.1). Switching now risks rework against a moving target. (Stale comment in `makeExitPlanResponse` corrected.)
+- ⏸ **Media `rawOutput.path` parsing** — needs a live `/imagine` wire capture to confirm the typed `rawOutput` shape; guessing would repeat the bare-`x.ai/` mistake. Text-parsing works meanwhile.
+- ⏸ **Primer → `_meta.rules`** — largest change; must handle legacy/resumed sessions (rules apply at session creation, so a fresh-session probe does NOT prove migration / `/compact` survival / restore); downstream of the same plan-mode uncertainty.
+
+Permissions honesty (§2.11) is optional (#49 is closed).
+
+---
+
 ## The headline: three discoveries that change our architecture
 
 ### 1. §2.11 / issue #49 — machine-dependent permission prompts: ROOT CAUSE FOUND
@@ -52,21 +121,29 @@ Other machine-dependent inputs on the same path:
 cause. Also check this dev box's `~/.claude/settings.json` — it is almost certainly the reason
 our machine never prompts.
 
-### 2. The `x.ai/session_notification` live rail — we were listening on the wrong method
+### 2. The `_x.ai/session_notification` live rail — downstream consumption is the gap
 
-There are **two rails** for xAI session events, and they are not the same:
+> **Superseded by the probe + Codex review — read the corrected framing under "Probe results" above.**
+> This section was the pre-probe hypothesis and got two things wrong: (a) it framed the rails as a
+> `_x.ai`-vs-`x.ai` PREFIX duality — in fact ALL x.ai extension methods are `_`-prefixed on the wire,
+> and the two rails differ by METHOD (`session_notification` vs `session/update`); (b) it claimed we
+> "never subscribed" to the live rail — `acp.ts:654-661` DOES receive `_x.ai/session_notification`.
+> The real gap is downstream (we don't consume its kinds beyond the compact donut).
 
-- `_x.ai/session/update` — the **persist** tag written to `updates.jsonl`
-  (`xai-grok-shell/src/session/storage/mod.rs:96,156`). Never pushed live. On `session/load` the
-  surviving lines are re-forwarded re-tagged **`x.ai/session/update`** (`agent/mvp_agent/mod.rs:1307-1351`).
-- **`x.ai/session_notification`** — the **live** push. Both emitters are unconditional (no
+There are **two rails** for xAI session events, distinguished by method (both `_`-prefixed on wire):
+
+- **`_x.ai/session_notification`** — the **live** lifecycle envelope. Emitters are unconditional (no
   capability/config gate): the session actor's `send_xai_notification`
-  (`session/acp_session_impl/updates.rs:701-744` — persists *and* sends the ExtNotification) and
-  the subagent coordinator's `emit_subagent_notification` (`agent/subagent/mod.rs:2216-2242`).
+  (`session/acp_session_impl/updates.rs:701-744`) and the subagent coordinator's
+  `emit_subagent_notification` (`agent/subagent/mod.rs:2216-2242`). **`acp.ts:654-661` receives it**
+  and emits `xaiNotification`.
+- **`_x.ai/session/update`** — the **persist/replay** records written to `updates.jsonl`
+  (`storage/mod.rs:92`), re-forwarded on `session/load` (`agent/mvp_agent/mod.rs:1307-1351`).
+  `acp.ts:670-682` routes it to `subagentLifecycle`.
 
-Our `acp.ts` routes `_x.ai/session/update` — the disk-only rail — which is why we live-verified
-"zero lifecycle events arrive while `updates.jsonl` fills" (§2.4). The live events ride a method
-we never subscribed to.
+The §2.4 "zero lifecycle events" measurement (grok 0.2.93) counted the wrong signal — the subagent
+UI reads `subagentLifecycle` (fed by `session/update`), but the lifecycle actually rides
+`session_notification` → `xaiNotification`, which the UI ignores. Wiring exists; consumption doesn't.
 
 Payloads on this one rail (`extensions/notification.rs`):
 - `SubagentSpawned` (`:560-595` — model, persona, role, capability_mode) and `SubagentFinished`
@@ -78,24 +155,30 @@ Payloads on this one rail (`extensions/notification.rs`):
 - `ImageDropped { notes }` (`acp_session_impl/turn.rs:189-196`) — the "silently dropped
   attachment" from §2.5, not silent after all.
 
-**Implement:** one new notification handler in `acp.ts` for `x.ai/session_notification` (+ the
-`x.ai/session/update` replay form) unlocks, in one shot: real subagent lifecycle UI
-(duration/tokens without envelope parsing), the post-`/compact` token count (**delete the hidden
-`/session-info` scrape turn**, `refreshContextAfterCompact`), and a user-visible dropped-image
-notice. **Probe first:** confirm the shipped stable build emits it (our 0.2.93 evidence only
-covers the persist rail).
+**Implement:** the `acp.ts` handler for `_x.ai/session_notification` already exists (`:654-661`);
+the work is *consuming* its kinds. This unlocks: the post-`/compact` token count (**done, v1.6.1** —
+the compact donut now reads `auto_compact_completed.tokens_after`, with the hidden `/session-info`
+scrape kept as a pre-rail fallback, not deleted), real subagent lifecycle UI (duration/tokens
+without envelope parsing), and a dropped-image notice. **Probe-confirmed on 0.2.101** for
+`auto_compact_completed` + `subagent_*`; `image_dropped` is source-confirmed only.
 
-### 3. §2.6 — session list/search/rename/delete/fork RPCs already exist, unadvertised
+### 3. §2.6 — session list/search/rename/delete/fork RPCs exist, unadvertised — AND ship in 0.2.101
 
 The `ext_method` router (`agent/mvp_agent/acp_agent.rs:3164-3508`) dispatches — unconditionally,
-no feature gate, just never advertised in `initialize`:
+no feature gate, just never advertised in `initialize`. **Wire form is `_`-prefixed**
+(`_x.ai/session/list`); the router matches the logical `x.ai/...` name after the decoder strips the
+`_`. **Confirmed shipped + working on 0.2.101** (probe re-run with the underscore): `rename` →
+`{success:true}`, `delete` removed the session dir.
 
-- `x.ai/session/list` + `x.ai/sessions/list` (:3168), `x.ai/session/search` (:3181 — the SQLite
-  FTS index behind `grok sessions search`), `x.ai/session/rename`, `x.ai/session/delete`,
-  `x.ai/session/fork` (:3189, handlers in `extensions/session_admin.rs`), `x.ai/session/info`,
-  `x.ai/session/close`, `x.ai/session/load_history`, `x.ai/session/updates`, `x.ai/session/repair`.
-- List rows carry **`sessionKind`** in item `_meta` (`session/unified_list/row.rs:18-53`,
-  `mod.rs:400`) — subagent filtering without reading `summary.json`.
+- `_x.ai/session/list` + `_x.ai/sessions/list` (:3168), `_x.ai/session/search` (:3181 — the SQLite
+  FTS index behind `grok sessions search`), `_x.ai/session/rename`, `_x.ai/session/delete`,
+  `_x.ai/session/fork` (:3189, `extensions/session_admin.rs`), `_x.ai/session/info`,
+  `_x.ai/session/close`, `_x.ai/session/load_history`, `_x.ai/session/updates`, `_x.ai/session/repair`.
+- `list` returns **`{ sessions, nextCursor, _meta }`** (`unified_list/mod.rs:298` `ExtListResponse`),
+  NOT `{ rows }`. **`sessionKind` is a TOP-LEVEL flattened row field** (`row.rs:123`), not in `_meta`
+  — `_meta["x.ai/session"].kind` is only the coarse `"build"`/`"chat"` class and can't distinguish a
+  subagent. Rename params: `{ sessionId, title, cwd? }`; delete: `{ sessionId, cwd? }`; info:
+  `{ sessionId }`.
 
 **Implement (staged):** probe the request/response schemas, then adopt **rename/delete** first
 (kills the `grok.sessionMeta` rename-override store and our `deleteSessionDir`), then
@@ -166,15 +249,20 @@ is in the same match — see "Roadmap unlocks" below.
 
 ### §2.4 Subagents
 
-- Lifecycle transmission: solved by discovery #2 (wrong method name, not a missing feature).
+- Lifecycle transmission: the events DO ship live on `_x.ai/session_notification` (which our client
+  already receives); the gap is that our subagent UI reads them off the persist/replay rail
+  (`subagentLifecycle`) instead of the live envelope — see § Probe results and discovery #2. Not a
+  missing feature, and not a wrong subscription — a wrong *downstream consumer*.
 - Background-spawn "completed" ack confirmed structural: the `run_in_background` branch returns
   `Ok(ToolOutput::Text("Subagent started in background…"))` synchronously
-  (`xai-grok-tools/src/implementations/grok_build/task/mod.rs:328-368`; text
-  `xai-tool-types/src/task.rs:258-271`). Keep our skip; `SubagentFinished`/auto-wake carries the
-  real result.
-- The envelope we strip is current: `<subagent_meta>` + `<subagent_result>` built at
-  `task.rs:276-313`; the "This is the output of the subagent:"/"Agent ID:" wrap survives only as
-  a legacy *parser* (`reminders/task_completion.rs:522-544`) — `cleanSubagentOutput`'s
+  (`xai-grok-tools/src/implementations/grok_build/task/mod.rs:328-368`; ack text in the shared
+  `crates/common/xai-tool-types/src/task.rs`). Keep our skip; `SubagentFinished`/auto-wake carries
+  the real result.
+- The envelope we strip is current: `<subagent_meta>` + `<subagent_result>` — the in-tree per-poll
+  construction is `task_output/mod.rs:581` (the shared helper lives in
+  `crates/common/xai-tool-types/src/task.rs`, a different crate prefix than the `crates/codegen/`
+  default used elsewhere here); the "This is the output of the subagent:"/"Agent ID:" wrap survives
+  only as a legacy *parser* (`reminders/task_completion.rs:522-544`) — `cleanSubagentOutput`'s
   all-patterns-optional design is right.
 - `_meta["x.ai/tool"]` stamping points: `stamp_tool_meta` (`tool_calls.rs:260-274`) on ToolCall
   stub/refined/permission-update/bash-dispatch; unresolved wire names (uninitialized MCP,
@@ -297,26 +385,17 @@ From the full `ext_method` router (`acp_agent.rs:3164-3508`) and docs
 
 ---
 
-## Recommended order (all pending live probes against shipped stable)
+## Recommended order — see "Probe results" at the top (authoritative)
 
-1. **#49 / permissions honesty** (§2.11) — pure client-side read of `~/.claude/settings*.json` +
-   `permission.toml` + `[claude_compat]`; answers an open user-trust issue. No CLI dependency.
-2. **`x.ai/session_notification` handler** (§2.3/§2.4/§2.5) — one handler, three features;
-   removes the `/session-info` scrape.
-3. **Plan verdict via `outcome`** (§2.1) — replace the JSON-RPC-error reject with
-   `{outcome:"cancelled"}`; then re-evaluate how much of the primer protocol remains necessary.
-4. **`GROK_SHELL` at spawn** (§2.9) — two lines in `acp.ts` env + probe.
-5. **Effort via `set_model` `_meta.reasoningEffort`** (§2.7) — ends effort-change restarts.
-6. **Primer → `_meta.rules`** — biggest simplification, touches the most machinery; probe
-   thoroughly (compact/restore interaction) before migrating.
-7. **Session RPCs adoption** (§2.6) — rename/delete first, list/search second; disk path stays
-   as fallback.
-8. **Media `rawOutput` path parsing + client-side min-size check** (§2.5) — small, independent.
+> This section originally held a *pre-probe* order that assumed live probing was still pending. The
+> probe (`research/oss-surfaces-probe.cjs`) has since been **built and run against shipped 0.2.101**,
+> so the authoritative, probe-confirmed order lives in the **"Revised implementation order"** under
+> § Probe results at the top of this doc. Superseded points here: session RPCs are **shipped**
+> (not deferred), the `_x.ai/session_notification` handler **already exists** (consume its kinds),
+> and #49 is **closed** (permissions honesty is optional, not the #1 priority).
 
-Probe harness: extend `research/*.cjs` with a `oss-surfaces-probe.cjs` that, against the shipped
-binary, (a) sends `x.ai/session/list`/`rename`/`delete`, (b) subscribes for
-`x.ai/session_notification` around a `/compact` and a subagent spawn, (c) replies
-`{outcome:"cancelled"}` to `exit_plan_mode`, (d) sets `_meta.reasoningEffort` on `set_model`,
-(e) passes `_meta.rules` on `session/new` and checks the system-prompt effect, (f) spawns with
-`GROK_SHELL=powershell` and inspects the first user message's `Shell:` line via
-`chat_history.jsonl`.
+The probe harness that produced the § Probe results verdicts is `research/oss-surfaces-probe.cjs`
+(scenarios: `sessionrpc`, `effort`, `notify`, `planoutcome`, `rules`, `shell`). It is a **diagnostic**,
+not a pass/fail gate — every scenario exits 0 with no assertions; treat its output as evidence to
+read, and promote the load-bearing checks into `scripts/live-tests.cjs` when they need to gate a
+release (e.g. the `auto_compact_completed` donut canary).

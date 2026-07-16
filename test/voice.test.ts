@@ -3,6 +3,7 @@ import {
   STT_ENDPOINT,
   MAX_RECORDING_SECONDS,
   resolveVoiceKey,
+  extractGrokAuthKey,
   buildFfmpegArgs,
   buildListDevicesArgs,
   parseDshowAudioDevices,
@@ -38,6 +39,71 @@ describe("resolveVoiceKey", () => {
   it("returns undefined when nothing is configured", () => {
     expect(resolveVoiceKey({})).toBeUndefined();
     expect(resolveVoiceKey({ setting: "   ", env: { XAI_API_KEY: "  " } })).toBeUndefined();
+  });
+
+  it("falls back to the login token (authKey) only after setting and env (#51)", () => {
+    // authKey is the LAST resort — an explicit key still wins.
+    expect(resolveVoiceKey({ setting: "explicit", authKey: "login-tok" })).toBe("explicit");
+    expect(resolveVoiceKey({ env: { XAI_API_KEY: "envk" }, authKey: "login-tok" })).toBe("envk");
+    // …but with nothing explicit, the login token is used.
+    expect(resolveVoiceKey({ authKey: "  login-tok  " })).toBe("login-tok");
+    expect(resolveVoiceKey({ authKey: "   " })).toBeUndefined();
+  });
+});
+
+describe("extractGrokAuthKey (#51 — reuse the CLI's grok-login token for Voice)", () => {
+  const NOW = 1_700_000_000_000; // fixed test clock (ms)
+  const SEC = Math.floor(NOW / 1000);
+  const xai = (id: string, entry: any) => JSON.stringify({ [`https://auth.x.ai::${id}`]: entry });
+
+  it("pulls .key from the sole xAI entry", () => {
+    expect(extractGrokAuthKey(xai("abc-123", { key: "tok-abc", email: "x@y.z" }), NOW)).toBe("tok-abc");
+  });
+
+  it("prefers a non-expired entry when several are present", () => {
+    const json = JSON.stringify({
+      "https://auth.x.ai::old": { key: "expired", expires_at: SEC - 1000 }, // seconds-epoch, past
+      "https://auth.x.ai::cur": { key: "fresh", expires_at: SEC + 1000 },
+    });
+    expect(extractGrokAuthKey(json, NOW)).toBe("fresh");
+  });
+
+  it("REFUSES a known-expired token so the mic doesn't 401 mid-recording (Codex #4)", () => {
+    expect(extractGrokAuthKey(xai("only", { key: "stale", expires_at: SEC - 1000 }), NOW)).toBeUndefined();
+  });
+
+  it("applies an expiry skew — refuses a token expiring within the minute", () => {
+    expect(extractGrokAuthKey(xai("s", { key: "soon", expires_at: SEC + 30 }), NOW)).toBeUndefined();
+    expect(extractGrokAuthKey(xai("s", { key: "later", expires_at: SEC + 300 }), NOW)).toBe("later");
+  });
+
+  it("tolerates ms-epoch, ISO, numeric-STRING, and a missing expires_at", () => {
+    expect(extractGrokAuthKey(xai("e", { key: "ms", expires_at: NOW + 300_000 }), NOW)).toBe("ms");
+    expect(extractGrokAuthKey(xai("e", { key: "iso", expires_at: "2099-01-01T00:00:00Z" }), NOW)).toBe("iso");
+    // A numeric STRING must read as epoch, not NaN-as-never-expires (Codex #4).
+    expect(extractGrokAuthKey(xai("e", { key: "numstr-old", expires_at: String(SEC - 1000) }), NOW)).toBeUndefined();
+    expect(extractGrokAuthKey(xai("e", { key: "numstr-new", expires_at: String(SEC + 1000) }), NOW)).toBe("numstr-new");
+    expect(extractGrokAuthKey(xai("e", { key: "noexp" }), NOW)).toBe("noexp");
+  });
+
+  it("ignores a NON-xAI issuer entry — never forwards an unrelated .key (Codex #5)", () => {
+    expect(extractGrokAuthKey(JSON.stringify({ "https://evil.example.com::x": { key: "nope" } }), NOW)).toBeUndefined();
+    // an xAI subdomain issuer is accepted
+    expect(extractGrokAuthKey(JSON.stringify({ "https://accounts.x.ai::y": { key: "yes" } }), NOW)).toBe("yes");
+  });
+
+  it("trims and ignores entries without a usable key", () => {
+    expect(extractGrokAuthKey(xai("e", { key: "  padded  " }), NOW)).toBe("padded");
+    const mixed = JSON.stringify({ "https://auth.x.ai::a": { email: "no key" }, "https://auth.x.ai::b": { key: "found" } });
+    expect(extractGrokAuthKey(mixed, NOW)).toBe("found");
+  });
+
+  it("returns undefined on parse failure / empty / no key / array", () => {
+    expect(extractGrokAuthKey("not json", NOW)).toBeUndefined();
+    expect(extractGrokAuthKey("", NOW)).toBeUndefined();
+    expect(extractGrokAuthKey("null", NOW)).toBeUndefined();
+    expect(extractGrokAuthKey("[]", NOW)).toBeUndefined();
+    expect(extractGrokAuthKey(xai("e", { email: "x" }), NOW)).toBeUndefined();
   });
 });
 

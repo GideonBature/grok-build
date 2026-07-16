@@ -129,6 +129,37 @@ export function resolveTerminalShell(
   return resolve("pwsh") ?? resolve("powershell") ?? true;
 }
 
+/**
+ * The `GROK_SHELL` value that tells the agent which shell dialect to WRITE for,
+ * derived from the shell we'll actually RUN its commands under
+ * (`resolveTerminalShell`). In ACP mode grok emits the raw command to the
+ * client's shell but describes the shell from its own host detection, so the two
+ * can diverge (e.g. the model writes POSIX `(cd x; y)` for a PowerShell host, or
+ * PowerShell syntax when we fall back to cmd) — setting `GROK_SHELL` in grok's
+ * spawn env realigns the model's dialect hints with our shell (§2.9;
+ * research/oss-surfaces-probe.cjs confirms it drives the first-message `Shell:`).
+ * Pure. POSIX returns `undefined` — grok's own host detection is correct there,
+ * so we don't override it. Windows maps the resolved shell to grok's accepted
+ * override values (`pwsh` / `powershell` / `cmd`).
+ */
+export function grokShellEnvValue(
+  resolved: string | true,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  if (platform !== "win32") return undefined;
+  if (resolved === true) return "cmd"; // cmd.exe: forced pref, or no PowerShell found
+  const base = resolved.toLowerCase();
+  if (base.includes("pwsh")) return "pwsh";
+  if (base.includes("powershell")) return "powershell";
+  return undefined; // unknown resolution — let grok's host detection decide
+}
+
+/** The resolved terminal shell (cached), for callers that need to align other
+ *  subsystems (e.g. the agent's `GROK_SHELL`) with what we run commands under. */
+export function resolvedTerminalShell(): string | true {
+  return terminalShell();
+}
+
 // Shell resolution runs a `where` subprocess, so cache it for the process
 // lifetime instead of paying that cost on every `terminal/create`.
 let shellPreference: ShellPreference = "auto";

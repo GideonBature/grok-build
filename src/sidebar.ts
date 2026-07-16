@@ -7,10 +7,10 @@ import { promisify } from "node:util";
 import { AcpClient, EffortLevel, ExitPlanRequest, PermissionRequest, QuestionRequest } from "./acp";
 import { Session, SessionStatus } from "./session";
 import { selectReapable, computeDot, Dot } from "./session-pool";
-import { resolveVoiceKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice";
+import { resolveVoiceKey, extractGrokAuthKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice";
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
-import { MediaRef, gateZeroTokenMeta, isIncompatibleAgentError, parseSessionInfoContext, permissionOutcomeFor, summarizeBackgroundCommand } from "./acp-dispatch";
+import { MediaRef, autoCompactStartedNote, contextUsedFromCompactNotification, gateZeroTokenMeta, isAuthErrorText, isIncompatibleAgentError, isSubagentLifecycleUpdate, parseSessionInfoContext, permissionOutcomeFor, summarizeBackgroundCommand } from "./acp-dispatch";
 import { modeToRemember, startsInYolo } from "./mode-prefs";
 import { GROK_VIEW_ID, moveViewContainerFor } from "./view-move";
 import {
@@ -31,7 +31,7 @@ import {
   isLockedBinaryError,
   GROK_STDIO_DOWNGRADE_TARGET,
 } from "./cli-locator";
-import { TerminalManager, setTerminalShellPreference, type ShellPreference } from "./terminal-manager";
+import { TerminalManager, grokShellEnvValue, resolvedTerminalShell, setTerminalShellPreference, type ShellPreference } from "./terminal-manager";
 import {
   FileChip,
   MAX_VISION_IMAGE_BYTES,
@@ -224,6 +224,11 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(GROK_DIFF_SCHEME, this.diffProvider),
     );
+    // Apply the terminal-shell preference at construction, BEFORE any command
+    // (e.g. grok.newSession) can spawn a session — otherwise the first
+    // resolvedTerminalShell() (for GROK_SHELL in buildEnv) could cache the
+    // default "auto" resolution and diverge from a configured `cmd` pref.
+    this.applyTerminalShellPref();
     void this.sweepImageStaging();
   }
 
@@ -1509,8 +1514,9 @@ See design doc for the full state machine diagram.`;
     client.on("messageChunk", (text: string) => {
       if (gen !== session.gen) return;
       session.inUserMessage = false;
-      // Hidden host-initiated turns (post-/compact /session-info) need the
-      // reply text; the emit below is suppressed for them (suppressContent).
+      // Hidden host-initiated turns (the pre-rail post-/compact /session-info
+      // fallback) need the reply text; the emit below is suppressed for them
+      // (suppressContent).
       if (session.captureAgentText !== undefined) session.captureAgentText += text;
       this.emit(session, { type: "messageChunk", text });
     });
@@ -1611,14 +1617,56 @@ See design doc for the full state machine diagram.`;
       this.emit(session, { type: "promptComplete", meta: gateZeroTokenMeta(meta) });
       // A zero report (stripped above) is /compact or /session-info; neither
       // warrants a donut update here. /session-info leaves the context
-      // untouched, and after /compact the fresh count comes from the hidden
-      // /session-info turn (refreshContextAfterCompact) — reading signals.json
-      // now would fetch the stale pre-compact count (the CLI recomputes it
-      // only at the next inference turn's end; research/signals-refresh-probe.cjs).
+      // untouched, and after /compact the fresh count comes from the live
+      // auto_compact_completed notification (primary; xaiNotification listener)
+      // or the hidden /session-info fallback — reading signals.json now would
+      // fetch the stale pre-compact count (the CLI recomputes it only at the
+      // next inference turn's end; research/signals-refresh-probe.cjs).
     });
     client.on("xaiNotification", (u) => {
       if (gen !== session.gen) return;
-      this.emit(session, { type: "xaiNotification", update: u });
+      // The post-compaction context size rides this live rail
+      // (`_x.ai/session_notification`): `auto_compact_completed.tokens_after` is
+      // the fresh count for BOTH a manual /compact and the CLI's automatic
+      // compaction. The turn meta reports it as 0 and signals.json won't hold it
+      // until the next inference turn, so this notification is the only instant
+      // source (research/oss-surfaces-probe.cjs, grok 0.2.101). The donut tracks
+      // the window itself (modelChanged), so pushing `used` alone updates it.
+      const kind = (u as { sessionUpdate?: string })?.sessionUpdate;
+      const compactUsed = contextUsedFromCompactNotification(u);
+      if (compactUsed !== null) {
+        this.emit(session, { type: "contextUsage", used: compactUsed });
+        // Mark the live rail as authoritative for the in-flight manual /compact
+        // so the pre-rail /session-info fallback + signals.json backup stand down.
+        session.sawCompactNotification = true;
+      }
+      // Compaction FAILED (either path — compaction.rs emits it on both). The
+      // context is unchanged, so the donut needs no refresh; mark handled so the
+      // /session-info fallback doesn't run, flag it so a manual /compact paints
+      // the failure instead of a false "Compacted.", and surface a note.
+      if (kind === "auto_compact_failed") {
+        session.sawCompactNotification = true;
+        session.sawCompactFailed = true;
+        const err = (u as { error?: unknown })?.error;
+        this.emit(session, {
+          type: "autoCompactNotice",
+          text: typeof err === "string" && err.trim() ? `Compaction failed: ${err.trim()}` : "Compaction failed.",
+        });
+      }
+      // Subagent lifecycle rides this LIVE rail (not the persist/replay
+      // subagentLifecycle channel). Re-route to the same `subagentUpdate` the
+      // webview cards already consume — subagent_finished fills duration/output.
+      if (isSubagentLifecycleUpdate(u)) this.emit(session, { type: "subagentUpdate", update: u });
+      // Automatic (context-full) compaction was previously silent — surface a
+      // dedicated notice (auto-path only; manual /compact paints "Compacted."
+      // from the slash path). Dedicated (not a messageChunk) so it finalizes any
+      // active bubble and can't reorder the agent's answer. Not persisted.
+      const autoCompactNote = autoCompactStartedNote(u);
+      if (autoCompactNote) this.emit(session, { type: "autoCompactNotice", text: autoCompactNote });
+      // NB: the raw `xaiNotification` forward to the webview was removed — the
+      // webview ignores it, so buffering every notification (incl. ~2s-cadence
+      // subagent_progress) only bloated the session replay buffer. The kinds we
+      // act on are re-emitted as their own (buffered, consumed) messages above.
     });
     client.on("subagentLifecycle", (u: unknown) => {
       if (gen !== session.gen) return;
@@ -2033,8 +2081,24 @@ See design doc for the full state machine diagram.`;
           break;
         }
 
+        // Live effort switch — no restart — when the CLI honors per-session
+        // effort (grok ≥ the build advertising models[]._meta.supportsReasoningEffort
+        // + accepting set_model _meta.reasoningEffort; confirmed 0.2.101). Only a
+        // real, non-empty effort qualifies — "unset" (back to default) still needs
+        // a fresh spawn without --reasoning-effort. Persist `defaultEffort` ONLY
+        // after the switch actually lands (live-applied, or restart accepted) — a
+        // persist-before that fails + dismissed restart would leave the saved
+        // default changed while the session ran at the old effort.
+        if (newLevel && this.focused.client.currentModelSupportsEffort()) {
+          const applied = await this.focused.client.setReasoningEffort(newLevel).catch(() => false);
+          if (applied) {
+            await cfg2.update("defaultEffort", newLevel, vscode.ConfigurationTarget.Global);
+            break;
+          }
+        }
+
         const mode = await this.pickRestartMode("Changing reasoning effort requires restarting the session.");
-        if (!mode) break; // dismissed
+        if (!mode) break; // dismissed — leave defaultEffort untouched
         await cfg2.update("defaultEffort", newLevel, vscode.ConfigurationTarget.Global);
         await this.restartSession(mode);
         break;
@@ -2481,12 +2545,21 @@ See design doc for the full state machine diagram.`;
 
   /** Resolve the xAI key for Speech-to-Text: the `grok.voiceApiKey` setting,
    *  else `GROK_VOICE_API_KEY` / `XAI_API_KEY` from the workspace .env or the
-   *  host environment. Distinct from the CLI's login — STT is a separate xAI
-   *  product (api.x.ai/v1/stt) that wants a console.x.ai developer key. */
+   *  host environment, else the reusable token the CLI stored at `grok login`
+   *  (`~/.grok/auth.json`) — so Voice works out of the box for a signed-in user,
+   *  no separate console.x.ai key needed (#51). */
   private resolveVoiceApiKey(cwd: string): string | undefined {
     const setting = vscode.workspace.getConfiguration("grok").get<string>("voiceApiKey", "");
     const env = { ...process.env, ...this.readDotEnv(cwd) } as Record<string, string | undefined>;
-    return resolveVoiceKey({ setting, env });
+    // Explicit config wins and short-circuits — only touch the credential file
+    // when nothing explicit is set (least-privilege; the login token is a
+    // last-resort fallback, #51).
+    const explicit = resolveVoiceKey({ setting, env });
+    if (explicit) return explicit;
+    try {
+      return extractGrokAuthKey(fs.readFileSync(path.join(resolveGrokHome(process.env), "auth.json"), "utf8"));
+    } catch { /* not logged in / unreadable — no key available */ }
+    return undefined;
   }
 
   /** Tell the webview whether a voice API key is resolvable, so the mic button
@@ -2589,7 +2662,7 @@ See design doc for the full state machine diagram.`;
   /** Show actionable guidance for setting up the voice API key. */
   private async promptVoiceKeySetup(): Promise<void> {
     const pick = await vscode.window.showErrorMessage(
-      "Voice control needs an xAI API key (Speech-to-Text) — a separate console.x.ai developer key, not your Grok CLI login. Set grok.voiceApiKey, or GROK_VOICE_API_KEY / XAI_API_KEY in your workspace .env.",
+      "Voice control needs an xAI Speech-to-Text key. Sign in with `grok login` and it reuses that token automatically — or set grok.voiceApiKey, or GROK_VOICE_API_KEY / XAI_API_KEY in your workspace .env for a dedicated console.x.ai key.",
       "Open Settings",
       "Get a Key",
     );
@@ -2671,6 +2744,13 @@ See design doc for the full state machine diagram.`;
   private async openVoiceStream(): Promise<void> {
     const ctx = this.voiceStreamCtx;
     if (!ctx) return;
+    // Re-resolve the credential on each (re)open so a "grok send" hands-free
+    // reconnect picks up a token the CLI refreshed mid-session, rather than
+    // reusing a possibly-stale cached one (Codex #7). Keep the old key if the
+    // fresh read comes back empty — it'll 401 with the source-aware guidance.
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const fresh = this.resolveVoiceApiKey(cwd);
+    if (fresh) ctx.key = fresh;
     const streamer = new VoiceStreamer();
     this.voiceStreamer = streamer;
     const isCurrent = () => this.voiceStreamer === streamer;
@@ -2693,7 +2773,13 @@ See design doc for the full state machine diagram.`;
       if (!isCurrent()) return;
       this.output.appendLine(`[voice] stream error: ${e.message}`);
       if (!this.voiceFinalizing) {
-        vscode.window.showErrorMessage(`Voice transcription failed: ${e.message}`);
+        if (/\b(401|403)\b|rejected/i.test(e.message)) {
+          void vscode.window.showErrorMessage(e.message, "Open Settings").then((pick) => {
+            if (pick === "Open Settings") void vscode.commands.executeCommand("workbench.action.openSettings", "grok.voiceApiKey");
+          });
+        } else {
+          vscode.window.showErrorMessage(`Voice transcription failed: ${e.message}`);
+        }
         this.post({ type: "voiceError" });
       }
       this.voiceStreamer = undefined;
@@ -2714,6 +2800,13 @@ See design doc for the full state machine diagram.`;
         const pick = await vscode.window.showErrorMessage(msg, "Open Settings");
         if (pick === "Open Settings") {
           await vscode.commands.executeCommand("workbench.action.openSettings", "grok.ffmpegPath");
+        }
+      } else if (/\b(401|403)\b|rejected/i.test(msg)) {
+        // Auth handshake rejection — msg is already the source-aware guidance
+        // (re-login or set a dedicated key); offer the settings shortcut.
+        const pick = await vscode.window.showErrorMessage(msg, "Open Settings");
+        if (pick === "Open Settings") {
+          await vscode.commands.executeCommand("workbench.action.openSettings", "grok.voiceApiKey");
         }
       } else {
         vscode.window.showErrorMessage(msg);
@@ -3191,21 +3284,33 @@ See design doc for the full state machine diagram.`;
       // indicator covers the gap. If the eager primer failed, this retries it.
       await this.ensurePrimed(client, session, gen);
       if (gen !== session.gen) return;
+      // Arm the compact-notification watch BEFORE the prompt: the live
+      // auto_compact_completed / auto_compact_failed land DURING this turn.
+      if (slashCommand === "compact") {
+        session.sawCompactNotification = false;
+        session.sawCompactFailed = false;
+      }
       const meta = await client.prompt(promptBlocks);
       if (gen !== session.gen) return; // session was switched mid-turn
       if (slashCommand === "compact") {
         // A native /compact streams no agent content (research/compact.md), so
         // the turn would end with a blank bubble and no sign it worked. Paint a
-        // live-only confirmation into that empty bubble. Deliberately not
-        // persisted: grok's own history has no such message, so re-focus (which
-        // replays the session buffer) keeps it but a disk restore won't.
-        this.emit(session, { type: "messageChunk", text: "Compacted." });
-        // The compact turn's own meta reports 0 (stripped) and signals.json
-        // still holds the pre-compact count, so the donut would sit stale
-        // until the next turn — fetch the fresh size now via a hidden
-        // /session-info (still inside the busy window, before agentEnd).
-        await this.refreshContextAfterCompact(client, session, gen);
-        if (gen !== session.gen) return;
+        // live-only confirmation into that empty bubble — UNLESS compaction failed
+        // (auto_compact_failed set sawCompactFailed), in which case the failure
+        // note already showed and a "Compacted." would contradict it. Deliberately
+        // not persisted: grok's own history has no such message, so re-focus keeps
+        // it but a disk restore won't.
+        if (!session.sawCompactFailed) this.emit(session, { type: "messageChunk", text: "Compacted." });
+        // Donut refresh, dynamic by CLI capability: the fresh post-compact size
+        // lands DURING this turn on the live `_x.ai/session_notification` rail
+        // (auto_compact_completed.tokens_after → the xaiNotification listener,
+        // which sets sawCompactNotification). If that rail didn't fire — a CLI
+        // that predates it, e.g. the Windows downgrade target 0.2.72 — fall back
+        // to the hidden /session-info scrape (exact, CLI-local, before agentEnd).
+        if (!session.sawCompactNotification) {
+          await this.refreshContextAfterCompact(client, session, gen);
+          if (gen !== session.gen) return;
+        }
       }
       // Skip agentEnd if a verdict was clicked mid-turn (afterTurn is queued).
       // Otherwise busy clears here, then the user could send during the brief
@@ -3215,6 +3320,7 @@ See design doc for the full state machine diagram.`;
         this.emit(session, { type: "agentEnd", meta });
         this.setStatus(session, "done");
       }
+      session.authRecoveryTried = false; // a clean turn re-arms token auto-recovery
       this.maybeGenerateTitle(session);
       if (slashCommand === "compact") {
         // A native compact rewrites the history around a summary, which can fold
@@ -3226,20 +3332,27 @@ See design doc for the full state machine diagram.`;
         // otherwise short-circuit ensurePrimed without sending anything.
         session.primed = false;
         session.primingPromise = undefined;
-        // The re-prime doubles as the donut BACKUP for /compact: the primary
-        // fix is the hidden /session-info above (instant, exact), but if its
-        // reply format ever drifts past the parser, this still lands — the
-        // CLI recomputes signals.json when an inference turn ends
-        // (research/signals-refresh-probe.cjs), and the hidden primer turn is
-        // exactly that, so once it acks the file has the post-compact count.
+        // The re-prime doubles as the donut BACKUP for /compact, but only when
+        // it can be TRUSTED: skip it if the live rail already gave us the exact
+        // count (sawCompactNotification), and require a SUCCESSFUL primer
+        // (session.primed) — a failed primer means no inference turn ended, so
+        // signals.json still holds the STALE pre-compact count and reading it
+        // would clobber the good value. When it does run, the CLI has recomputed
+        // signals.json at the primer turn's end (research/signals-refresh-probe.cjs).
         void this.ensurePrimed(client, session, gen).then(() => {
-          if (gen === session.gen) this.emitContextUsageSoon(session, gen);
+          if (gen === session.gen && !session.sawCompactNotification && session.primed) {
+            this.emitContextUsageSoon(session, gen);
+          }
         });
       }
     } catch (err) {
       if (gen !== session.gen) return; // prompt rejected because we disposed the old client — don't leak the error into the new session
       const e = err as any;
       const message = e?.data?.message ?? e?.message ?? String(err);
+      // An expired-token error wedges only THIS long-lived process (the CLI shares
+      // ~/.grok/auth.json across the pool + sibling `grok login`); transparently
+      // reload the process and resend before surfacing the error (see method doc).
+      if (await this.recoverAuthAndResend(session, message, text, sentChips, promptBlocks)) return;
       this.emit(session, { type: "agentError", text: message });
       this.setStatus(session, "error");
     } finally {
@@ -3252,6 +3365,69 @@ See design doc for the full state machine diagram.`;
       // was torn down mid-turn.
       if (gen === session.gen) void this.maybeFlushQueuedSends(session);
     }
+  }
+
+  /**
+   * Recover from an expired-token turn failure without a manual sign-out. A
+   * pooled `grok agent stdio` process can wedge on an expired OAuth token when
+   * its 401-refresh loses a rotation race with the sibling processes / `grok
+   * login` that share `~/.grok/auth.json`; the API then rejects it (often as a
+   * misleading "you need to pay"). A FRESH process re-reads the current disk
+   * token — exactly what re-login does, minus the sign-out — so we transparently
+   * restart the focused session (`startSession` respawns + `session/load`s to
+   * preserve history) and RE-SEND the failed prompt once. Guarded by
+   * `authRecoveryTried` (reset on any clean turn) so a genuine dead-auth / real
+   * billing error can't loop: the resend's own failure surfaces normally.
+   * Returns true when it handled the error (caller must not also show it).
+   */
+  private async recoverAuthAndResend(
+    session: Session,
+    errorText: string,
+    displayText: string,
+    chips: FileChip[],
+    promptBlocks: Parameters<AcpClient["prompt"]>[0],
+  ): Promise<boolean> {
+    if (!isAuthErrorText(errorText)) return false;
+    if (session !== this.focused) return false;   // only the active session is safe to reload here
+    if (!session.activeSessionId) return false;   // need an id to session/load history back
+    if (session.authRecoveryTried) return false;  // already retried this streak → let it surface
+    session.authRecoveryTried = true;
+    this.output.appendLine(`[auth] recoverable token error — reloading session + resending: ${errorText}`);
+
+    // Fresh process, current disk token. Rebuilds this.focused (same object) and
+    // replays history from disk — which drops the un-persisted failed turn, so we
+    // re-add the user's bubble below before resending.
+    const client = await this.startSession(session.activeSessionId);
+    if (!client || this.focused !== session) return true; // startSession surfaced its own failure/onboarding
+    await (session.primingPromise ?? Promise.resolve()); // grok runs one turn at a time
+    const gen = session.gen;
+    if (gen !== session.gen) return true;
+
+    session.userMessageCount += 1;
+    this.emit(session, { type: "userMessage", text: displayText, chips });
+    this.emit(session, { type: "agentStart" });
+    this.setStatus(session, "working");
+    try {
+      const meta = await client.prompt(promptBlocks);
+      if (gen !== session.gen) return true;
+      this.emit(session, { type: "agentEnd", meta });
+      this.setStatus(session, "done");
+      session.authRecoveryTried = false; // recovered — re-arm for a future expiry
+      this.maybeGenerateTitle(session);
+    } catch (err2) {
+      if (gen !== session.gen) return true;
+      const e2 = err2 as any;
+      const t2 = e2?.data?.message ?? e2?.message ?? String(err2);
+      if (isAuthErrorText(t2)) {
+        // A fresh process still can't auth → auth.json genuinely dead (or a real
+        // billing block) → the honest ask is a re-login.
+        this.emit(session, { type: "onboarding", state: "auth-required" });
+      } else {
+        this.emit(session, { type: "agentError", text: t2 });
+        this.setStatus(session, "error");
+      }
+    }
+    return true;
   }
 
   private maybeGenerateTitle(session: Session): void {
@@ -3584,13 +3760,15 @@ See design doc for the full state machine diagram.`;
     }, 1500);
   }
 
-  /** Fetch the post-compact context size via a hidden /session-info turn and
-   *  push it to the donut. The turn is CLI-local (~25ms, no model call) and is
-   *  NOT persisted to chat history, so nothing shows live or on restore; its
-   *  reply text is the only place the fresh count exists this early
-   *  (research/signals-refresh-probe.cjs). Runs before the compact turn's
-   *  agentEnd clears busy, so no user send can interleave. Parse failure is
-   *  silent — the post-compact re-prime's signals.json read is the backup. */
+  /** Pre-rail fallback for the post-/compact donut: fetch the fresh context size
+   *  via a hidden /session-info turn. Runs ONLY when the live
+   *  auto_compact_completed notification didn't fire (a CLI older than that rail,
+   *  e.g. the Windows downgrade target). The turn is CLI-local (~25ms, no model
+   *  call) and is NOT persisted to chat history, so nothing shows live or on
+   *  restore; its reply text is the only place the fresh count exists this early
+   *  on such builds (research/signals-refresh-probe.cjs). Runs before the compact
+   *  turn's agentEnd clears busy, so no user send can interleave. Parse failure is
+   *  silent — the post-compact re-prime's signals.json read is the second backup. */
   private async refreshContextAfterCompact(client: AcpClient, session: Session, gen: number): Promise<void> {
     // Drift guard: if a future CLI stops advertising /session-info, sending it
     // anyway would become a REAL inference turn (and a restore-visible bubble).
@@ -3767,6 +3945,18 @@ See design doc for the full state machine diagram.`;
     // Map from either source (workspace .env or the user's shell environment).
     if (env["XAI_API_KEY"] && !env["GROK_CODE_XAI_API_KEY"]) {
       env["GROK_CODE_XAI_API_KEY"] = env["XAI_API_KEY"];
+    }
+
+    // Tell the agent which shell dialect to write for — match the shell we
+    // actually run its commands under (#46, §2.9). Presence check (not truthiness)
+    // so an explicitly-empty user GROK_SHELL ("let grok detect") is honored, not
+    // overridden. Frozen at spawn: a mid-session `grok.terminalShell` toggle
+    // updates the shell we RUN commands under (cache cleared) but not this env,
+    // so the dialect hint realigns on the next session — acceptable for a rare
+    // escape-hatch toggle.
+    if (!("GROK_SHELL" in env)) {
+      const grokShell = grokShellEnvValue(resolvedTerminalShell(), process.platform);
+      if (grokShell) env["GROK_SHELL"] = grokShell;
     }
 
     if (Object.keys(dotEnv).length > 0) {

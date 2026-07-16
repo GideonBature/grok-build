@@ -1,5 +1,14 @@
 # Subagents over ACP
 
+> **v1.6.1 update (grok 0.2.101):** the `subagent_spawned`/`subagent_finished`
+> lifecycle events DO transmit live — on the **`_x.ai/session_notification`** rail
+> (NOT the `_x.ai/session/update` persist/replay rail the 0.2.93 measurement
+> watched, which is why it saw "never transmitted"). The extension now CONSUMES
+> them (`isSubagentLifecycleUpdate` re-routes to the webview's `subagentUpdate`)
+> for real `duration_ms` + output, **including the Composer agent**. Any "only
+> logs / never transmitted over ACP" note below is superseded — see
+> `research/grok-build-oss-findings.md` § discovery-2 and `docs/ACP-feedback.md` §2.4.
+
 > **Status: SHIPPED (subagent row) as of grok 0.2.93 / extension post-1.5.5.**
 > grok now emits a **genuine `spawn_subagent` tool call** — see § Ground truth
 > (0.2.93) below for the captured wire shapes. The extension renders a

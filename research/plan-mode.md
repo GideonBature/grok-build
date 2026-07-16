@@ -1,5 +1,12 @@
 # Plan mode — why it's disabled, and why disabling it isn't enough
 
+> **Update (grok 0.2.101):** the "`exit_plan_mode` treats any response — result or
+> error — as approval; no wire-level reject" claim below is **FIXED upstream** — a
+> success `{outcome:"cancelled"}` now rejects a plan. The extension retains the
+> primer + client-side gate anyway, because the gate is still needed for the
+> terminal-tool hole (plan mode rejects the edit tool but passes `terminal/create`).
+> See `research/plan-mode-recheck-findings.md` and `research/grok-build-oss-findings.md` §2.1.
+
 Research notes. Status as of `grok` 0.2.3 (native Windows), extension v1.1.0, 2026-05-27.
 
 > **Resolved (2026-05-28): Option B+ shipped.** Plan mode is re-enabled and enforced

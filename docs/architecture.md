@@ -32,6 +32,7 @@ VS Code webview ──postMessage──► extension host ──JSON-RPC over st
                                                   ◄── terminal/create, terminal/output, terminal/wait_for_exit, terminal/kill, terminal/release
                                                   ◄── session/request_permission
                                                   ◄── x.ai/exit_plan_mode, x.ai/ask_user_question
+                                                  ◄── _x.ai/session_notification (live rail: auto_compact_completed/started/failed → donut + notice; subagent_spawned/finished → card duration/output; model_changed → effort/model sync)
 ```
 
 The extension implements **every mandatory server→client handler**
@@ -191,7 +192,7 @@ The full pedagogical write-up lives in
 | [src/acp.ts](../src/acp.ts) | ACP client — spawns CLI, manages session lifecycle, emits events |
 | [src/session.ts](../src/session.ts) | Per-session state bag — one `Session` per live `grok agent stdio` process (the sidebar holds a *pool* of these + one focused) |
 | [src/session-pool.ts](../src/session-pool.ts) | Pure reaping policy (`selectReapable`) — idle-TTL + LRU cap over the live-session pool |
-| [src/acp-dispatch.ts](../src/acp-dispatch.ts) | Pure protocol helpers — line parsing, update routing, response + generated-media extraction (`isMediaGenToolCall`/`extractGeneratedMediaPaths`) |
+| [src/acp-dispatch.ts](../src/acp-dispatch.ts) | Pure protocol helpers — line parsing, update routing, response + generated-media extraction (`isMediaGenToolCall`/`extractGeneratedMediaPaths`), and the live `_x.ai/session_notification` consumers (`contextUsedFromCompactNotification`, `autoCompactStartedNote`, `isSubagentLifecycleUpdate`) |
 | [src/protocol.ts](../src/protocol.ts) | Single source of truth for the host↔webview message contract — `HostMsg`/`WebviewMsg` unions + the runtime `HOST_MESSAGE_TYPES`/`WEBVIEW_MESSAGE_TYPES` arrays (kept exhaustive by compile-time `Record` maps). Pure types + two arrays, no runtime deps |
 | [src/cli-locator.ts](../src/cli-locator.ts) | Locate the `grok` binary; cross-platform |
 | [src/terminal-manager.ts](../src/terminal-manager.ts) | Headless shells for the agent's `terminal/*` calls |
@@ -212,7 +213,7 @@ The full pedagogical write-up lives in
 | [src/voice-streamer.ts](../src/voice-streamer.ts) | Live capture (ffmpeg PCM → WebSocket STT) |
 | [src/telemetry.ts](../src/telemetry.ts) | Anonymous Aptabase telemetry — pure payload builders + a fire-and-forget `session_start` (opt-out via `grok.telemetry.enabled`; see [privacy.md](privacy.md)) |
 | [media/chat.{js,css}](../media/) | Webview UI |
-| [media/webview-helpers.js](../media/webview-helpers.js) | Pure webview helpers (file-ref detection, relative-time, mic-button state machine, trailing send-phrase highlight, math extraction `splitMath`/`stripUnsupportedTex`, and the deferred subagent classifier `isSubagentToolCall`/`subagentLabel`) — shared between webview and tests |
+| [media/webview-helpers.js](../media/webview-helpers.js) | Pure webview helpers (file-ref detection, relative-time, mic-button state machine, trailing send-phrase highlight, math extraction `splitMath`/`stripUnsupportedTex`, and the subagent classifier `isSubagentToolCall`/`subagentLabel`) — shared between webview and tests |
 
 ## History at scale
 
@@ -264,8 +265,18 @@ the steady-state fix.
   for the agent's `terminal/*` commands via `resolveTerminalShell`: on Windows it
   runs them under PowerShell (`pwsh.exe`→`powershell.exe`→cmd.exe) to match the
   standalone grok CLI (#46 — cmd couldn't run the user's PowerShell profile
-  functions or pipelines); elsewhere `shell:true` → `/bin/sh`. `cli-locator.ts`
-  prefers `HOME`/`USERPROFILE` env over `os.homedir()` so tests can override paths.
+  functions or pipelines); elsewhere `shell:true` → `/bin/sh`. It also sets
+  **`GROK_SHELL`** in grok's spawn env (the pure `grokShellEnvValue`) to match
+  that shell, so the agent writes the correct dialect instead of guessing from its
+  own host detection (§2.9). `cli-locator.ts` prefers `HOME`/`USERPROFILE` env over
+  `os.homedir()` so tests can override paths.
+- **Reasoning effort switches live where the CLI supports it.** Changing effort no
+  longer restarts the process: `client.setReasoningEffort` sends `session/set_model`
+  with `_meta.reasoningEffort` when the model advertises `supportsReasoningEffort`
+  (grok 0.2.101+); the client tracks the effective effort from the `model_changed`
+  notification (authoritative) and carries it through model switches (gated on the
+  target model's effort menu). Older CLIs, and resetting to the model default, fall
+  back to the Summarize/Restart flow.
 - **Streaming is rAF-coalesced.** Message and thought chunks buffer into a raw
   string and re-render at most once per animation frame — long responses stay
   smooth under fast chunk rates.
@@ -282,8 +293,9 @@ the steady-state fix.
   [src/acp-dispatch.ts](../src/acp-dispatch.ts)), persists the pick to
   `grok.defaultModel` and restarts — `newSession` re-applies the model *before* the
   primer runs, while the agent is still rebindable. No history → transparent
-  restart; with history → the same Summarize / Just-Restart choice as an effort
-  change. A restart on a *primer-only* session (no real conversation — common when
+  restart; with history → a Summarize / Just-Restart choice. (An **effort** change,
+  by contrast, no longer restarts on recent CLIs — see the live-effort bullet
+  below.) A restart on a *primer-only* session (no real conversation — common when
   you flip models/effort right after opening) takes the no-prompt path **and**
   discards the abandoned grok session dir afterward, so repeated switches don't pile
   up identical empty sessions in history; the pure `carrySessionName` moves any user

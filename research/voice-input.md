@@ -104,6 +104,13 @@ Blockers, all real:
    So Path B requires the user to supply a separate xAI API key; it does NOT ride
    the CLI login. (Even if the OAuth token were technically accepted by
    `api.x.ai` today, that'd be undocumented cross-domain reuse — not shippable.)
+   > **Overturned by #51 (v1.6.1).** The `~/.grok/auth.json` `key` **is** accepted
+   > by `api.x.ai/v1/stt` and works for STT (user-confirmed). The extension now
+   > reuses it as the last-resort Voice credential when no dedicated key is set —
+   > so voice works without a separate key. A dedicated `grok.voiceApiKey` still
+   > wins. It remains undocumented xAI behavior (a `capabilities`/`vision-prompt`-
+   > style drift risk), and the transmission is disclosed in [docs/privacy.md](../docs/privacy.md).
+   > See `extractGrokAuthKey`/`resolveVoiceKey` in [src/voice.ts](../src/voice.ts).
 2. **Billing.** ~$0.10/hr batch — a paid dependency the extension doesn't have today.
 3. **Architecture break.** The extension is a thin client where *all* state lives
    in the CLI (see CLAUDE.md). A direct HTTP call to `api.x.ai` is a new, non-CLI

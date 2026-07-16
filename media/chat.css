@@ -687,6 +687,21 @@ body.thinking-hidden .msg.thinking { display: none; }
   background: var(--vscode-textBlockQuote-background, rgba(177, 128, 215, 0.08));
   border-radius: 0 6px 6px 0;
 }
+/* A failed subagent reads as failed at a glance — red left border + red
+   label/marker — matching how a failed tool call (.tool-failed) signals. */
+.subagent-card.subagent-failed {
+  border-left-color: var(--vscode-errorForeground);
+}
+.subagent-card.subagent-failed .subagent-label,
+.subagent-card.subagent-failed .subagent-badge,
+.subagent-card.subagent-failed .subagent-time {
+  color: var(--vscode-errorForeground);
+}
+/* A cancelled subagent was a user stop, not a failure — reads muted, not red
+   (mirrors the command path's grey [Cancelled] marker). */
+.subagent-card.subagent-cancelled .subagent-time {
+  opacity: 0.7;
+}
 .subagent-card .subagent-row {
   display: flex;
   align-items: center;

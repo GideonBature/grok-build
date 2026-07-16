@@ -20,7 +20,7 @@
     "voiceError", "chips", "commandsUpdate", "userMessage", "agentStart", "thoughtChunk",
     "messageChunk", "media", "userMessageChunk", "historyReplay", "permissionHistoryQueue",
     "planHistoryQueue", "planProcessing", "toolCall", "toolCallUpdate", "permissionRequest",
-    "permissionResolved", "exitPlanRequest", "planResolved", "questionRequest", "planNotice", "planBlocked",
+    "permissionResolved", "exitPlanRequest", "planResolved", "questionRequest", "planNotice", "autoCompactNotice", "planBlocked",
     "promptComplete", "contextUsage", "commandOutput", "expandCommandOutputs", "setAllToolDetails", "focusInput", "agentReset", "agentError", "agentEnd", "exit", "setBusy", "summarizing",
     "sessionContext", "clearMessages", "onboarding", "error", "xaiNotification", "subagentUpdate", "sessions",
     "sessionDot", "queuedSends",
@@ -211,6 +211,14 @@
       .replace(/<subagent_(meta|result)>[\s\S]*?<\/subagent_\1>/g, "")
       .replace(/<\/?subagent_(meta|result)>/g, "")
       .trim();
+    // Defense: if a whole poller blob (=== Task … === / Command / Status / …
+    // === Output ===) reaches here unparsed, keep only the child's words.
+    const outDivider = /^[\s\S]*?^===\s*Output\s*===\s*\n?/im;
+    if (/^===\s*Task\s+/im.test(s) && outDivider.test(s)) s = s.replace(outDivider, "").trim();
+    // A restored card's persisted body can lead with a `[subagent:<type>]` label
+    // (the live path never shows it) — strip it FIRST so a label + lead-in combo
+    // ("[subagent:x] response: …") still reaches the lead-in strips below.
+    s = s.replace(/^\[subagent:[^\]]*\]\s*/i, "");
     s = s.replace(/^this is the output of the subagent:\s*/i, "");
     s = s.replace(/^response:\s*/i, "");
     // The Agent ID hint trails AFTER </response>, so strip it before the
@@ -219,6 +227,41 @@
     const wrapped = /^<response>\s*([\s\S]*?)\s*<\/response>$/i.exec(s);
     if (wrapped) s = wrapped[1];
     return s.trim();
+  }
+
+  // A background subagent's result comes back on the `get_command_or_subagent_output`
+  // poller. Live, that's a structured `rawOutput.TaskOutput.Result`; on a cold
+  // `session/load` grok replays it FLATTENED to a text blob instead:
+  //   === Task <id> ===
+  //   Command: [subagent:<type>] <description>
+  //   Status: completed|failed|cancelled
+  //   Duration: 18.78s
+  //   === Output ===
+  //   <the child's actual words>
+  //   <subagent_meta …>/<subagent_result …>
+  // Parse that back into the same shape finishSubagentCard wants, so a restored
+  // background delegation shows its result + duration instead of a bare, dead
+  // poller row. Returns null unless the blob is genuinely a SUBAGENT task result
+  // (a backgrounded shell command polls through the same tool — leave those be).
+  function parseSubagentTaskResult(text) {
+    const s = String(text == null ? "" : text);
+    const taskM = /^===\s*Task\s+(\S+)\s*===/im.exec(s);
+    if (!taskM) return null;
+    const isSubagent = /Command:\s*\[subagent:/i.test(s) || /<subagent_(meta|result)\b/i.test(s);
+    if (!isSubagent) return null;
+    const statusM = /^\s*Status:\s*(\w+)/im.exec(s);
+    const status = statusM ? statusM[1].toLowerCase() : "completed";
+    let durationMs = null;
+    const metaMs = /duration_ms\s*=\s*(\d+)/i.exec(s);
+    const durSecs = /^\s*Duration:\s*([\d.]+)\s*s/im.exec(s);
+    if (metaMs) durationMs = parseInt(metaMs[1], 10);
+    else if (durSecs) durationMs = Math.round(parseFloat(durSecs[1]) * 1000);
+    // Everything after the "=== Output ===" divider is the child's words; the
+    // envelope trailers (<subagent_meta>/<subagent_result>) are stripped by
+    // cleanSubagentOutput downstream. No divider → nothing usable.
+    const outM = /^===\s*Output\s*===\s*\n?([\s\S]*)$/im.exec(s);
+    const output = outM ? outM[1].trim() : "";
+    return { taskId: taskM[1], status, durationMs, output, failed: status !== "completed" };
   }
 
   // Human label for a subagent card: the agent type grok delegated to
@@ -329,7 +372,16 @@
   // something → "command" fallback, so an unparseable command still reads "Run command".
   function commandProgramLabel(command) {
     if (typeof command !== "string") return "command";
-    const stmt = command.trim().split(/\s*(?:&&|\|\||;|\||&|\n)\s*/)[0].trim();
+    let cleaned = command.trim();
+    // A `(…)` subshell is grok's navigate-then-run idiom (`(cd dir ; cmd)`, the
+    // POSIX form it emits even against a PowerShell host): strip the wrapping
+    // parens and skip a leading `cd <dir>` prelude so the label names the command
+    // that does the work, not the `(cd` plumbing. Outside a subshell the first
+    // statement is used verbatim — a user-typed `cd src && npm test` keeps its `cd`.
+    const subshell = cleaned.startsWith("(");
+    if (subshell) cleaned = cleaned.replace(/^\(+\s*/, "").replace(/\s*\)+$/, "");
+    const statements = cleaned.split(/\s*(?:&&|\|\||;|\||&|\n)\s*/).map((s) => s.trim()).filter(Boolean);
+    const stmt = (subshell ? statements.find((s) => !/^cd(\s|$)/.test(s)) : undefined) || statements[0] || "";
     if (!stmt) return "command";
     // Tokenize, tracking whether each token was quoted (Windows paths / banners).
     const tokens = [];
@@ -345,8 +397,12 @@
     const prog = rawProg.split(/[\\/]/).pop() || rawProg; // basename
     const nextTok = tokens[i + 1];
     // Append the next token only when it's a bare, non-flag word — a real
-    // subcommand (`git status`), never a quoted argument value.
-    const next = nextTok && !nextTok.quoted && !/^[-/]/.test(nextTok.text) ? nextTok.text : null;
+    // subcommand (`git status`), never a quoted argument value, a flag, or a
+    // path/filename argument (`node research/x.cjs` → "node", not the script path).
+    const next =
+      nextTok && !nextTok.quoted && !/^[-/]/.test(nextTok.text) && !/[\\/]/.test(nextTok.text)
+        ? nextTok.text
+        : null;
     const label = next ? `${prog} ${next}` : prog;
     return label.length > 30 ? label.slice(0, 29) + "…" : label;
   }
@@ -577,7 +633,7 @@
     return { lines, added, removed, truncated: false };
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, cleanSubagentOutput, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, commandProgramLabel, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, commandProgramLabel, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

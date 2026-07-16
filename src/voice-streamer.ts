@@ -13,6 +13,7 @@ import {
   buildFfmpegStreamArgs,
   applySegment,
   joinSegments,
+  classifySttError,
   TranscriptSegment,
 } from "./voice";
 import { resolveWindowsAudioDevice } from "./voice-recorder";
@@ -87,7 +88,18 @@ export class VoiceStreamer extends EventEmitter {
           fail(new Error(ev.message || ev.error || "Speech-to-Text streaming error."));
         }
       });
-      ws.on("error", (e: Error) => fail(e));
+      // A rejected handshake (bad/expired credential) arrives here with the HTTP
+      // status — map it to the same source-aware guidance batch STT gives, since
+      // streaming is the DEFAULT path and would otherwise show a raw
+      // "Unexpected server response: 401" (Codex #3).
+      ws.on("unexpected-response", (_req, res: { statusCode?: number }) => {
+        const status = res && res.statusCode;
+        fail(new Error(status ? classifySttError(status) : "Speech-to-Text streaming failed to connect."));
+      });
+      ws.on("error", (e: Error) => {
+        const m = /\b(401|403)\b/.exec(e.message || "");
+        fail(m ? new Error(classifySttError(Number(m[1]))) : e);
+      });
       ws.on("close", () => { clearTimeout(timer); this.stopCapture(); });
     });
   }

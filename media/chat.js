@@ -347,7 +347,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, cleanSubagentOutput, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, commandProgramLabel, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, commandProgramLabel, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -2330,6 +2330,16 @@
       mark.className = "cmd-out-marker";
       mark.textContent = `[Error] exit ${msg.exitCode}`;
       body.appendChild(mark);
+      // Roll the failure up to the ROW + GROUP so a non-zero command reads as an
+      // error at a glance — consistent with a status:"failed" tool (markToolFailed).
+      // The `[Error] exit N` above is the OUT-block detail; this is the summary
+      // signal. No extra `.tool-error` text — the OUT marker already carries it.
+      const row = details.closest && details.closest(".tool-item, .tool-flat");
+      if (row) {
+        row.classList.add("tool-failed");
+        const group = row.closest && row.closest(".tool-group");
+        if (group) group.classList.add("has-error");
+      }
     } else if (msg.exitCode == null) {
       const mark = document.createElement("div");
       mark.className = "cmd-out-marker muted";
@@ -2898,21 +2908,35 @@
   // late duplicate may still fill in a missing duration (Composer's completed
   // update carries no duration_ms; its lifecycle event does).
   function finishSubagentCard(el, info) {
+    const failed = !!info.failed;
+    const cancelled = !!info.cancelled && !failed;
+    const ms = typeof info.durationMs === "number" ? info.durationMs : null;
+    const dur = ms != null ? `· ${Math.max(1, Math.round(ms / 1000))}s` : "";
+    // A failure/cancel is visible on the row itself ("· failed"/"· cancelled",
+    // red via .subagent-failed CSS, muted via .subagent-cancelled) — you
+    // shouldn't have to expand the result to see it went wrong.
+    const statusWord = failed ? "failed" : cancelled ? "cancelled" : "";
+    const timeText = statusWord ? (dur ? `· ${statusWord} ${dur}` : `· ${statusWord}`) : dur;
     if (el.classList.contains("subagent-done")) {
-      const lateMs = typeof info.durationMs === "number" ? info.durationMs : null;
+      // Already finished (a tool-channel completion routinely races ahead of the
+      // lifecycle finish for the SAME card) — upgrade a missing duration AND a
+      // not-yet-shown failure/cancel marker, the two things a later event adds.
+      if (failed) el.classList.add("subagent-failed");
+      if (cancelled && !el.classList.contains("subagent-failed")) el.classList.add("subagent-cancelled");
       const timeEl = el.querySelector(".subagent-time");
-      if (lateMs != null && timeEl && !timeEl.textContent) {
-        timeEl.textContent = `· ${Math.max(1, Math.round(lateMs / 1000))}s`;
+      if (timeEl) {
+        if (statusWord) timeEl.textContent = timeText;
+        else if (ms != null && !timeEl.textContent) timeEl.textContent = dur;
       }
       return;
     }
     el.classList.add("subagent-done");
+    if (failed) el.classList.add("subagent-failed");
+    else if (cancelled) el.classList.add("subagent-cancelled");
     const dots = el.querySelector(".blink-dots");
     if (dots) dots.remove();
-    const ms = typeof info.durationMs === "number" ? info.durationMs : null;
-    if (ms != null) {
-      el.querySelector(".subagent-time").textContent = `· ${Math.max(1, Math.round(ms / 1000))}s`;
-    }
+    const timeEl = el.querySelector(".subagent-time");
+    if (timeEl) timeEl.textContent = timeText;
     // cleanSubagentOutput strips the CLI envelope (plumbing tags, boilerplate
     // lead-ins, one wrapping <response> pair, the trailing Agent ID hint) so
     // only the child's actual words render — as markdown, since subagent
@@ -2937,7 +2961,7 @@
     el.className = "subagent-card";
     el.innerHTML =
       `<div class="subagent-row">` +
-        `<span class="subagent-badge">${ICON.listTree || "🤖"}</span>` +
+        `<span class="subagent-badge">${ICON.bot || "🤖"}</span>` +
         `<span class="subagent-label">Subagent</span>` +
         `<span class="subagent-sep">·</span>` +
         `<span class="subagent-title"></span>` +
@@ -2946,6 +2970,12 @@
       `</div>` +
       `<div class="subagent-result" hidden></div>`;
     setSubagentTitle(el, call);
+    // Cards rebuilt by a cold restore never receive their own subagent_spawned
+    // (session/load strips the lifecycle rail), so they'd sit permanently
+    // untagged — a magnet for a LATER live spawn's FIFO tag, corrupting the old
+    // card with the new run's duration/output. Mark them so live spawn-tagging
+    // and the no-id finish fallback skip them.
+    if (state.replaying) el.dataset.subagentReplayed = "1";
     messagesEl.appendChild(el);
     if (call && call.toolCallId) state.subagentCards.set(call.toolCallId, el);
     applySubagentUpdate(call, el); // a replayed call may already be completed
@@ -2966,7 +2996,7 @@
     // duration (the subagent_finished lifecycle event fills that in).
     const out = call && call.rawOutput;
     const status = String(call?.status || "").toLowerCase();
-    const finished = status === "completed" || status === "failed" ||
+    const finished = status === "completed" || status === "failed" || status === "cancelled" ||
       (out && out.type === "SubagentCompleted");
     if (!finished) return;
     // Output lives in rawOutput.output (SubagentCompleted), rawOutput.text
@@ -2984,23 +3014,28 @@
       if (ackId && !el.dataset.subagentId) el.dataset.subagentId = ackId[1];
       return;
     }
+    // Thread the failure/cancel through the tool-channel path too — not just the
+    // lifecycle rail — since the tool-channel completion is the common ordering.
     finishSubagentCard(el, {
       durationMs: out && typeof out.duration_ms === "number" ? out.duration_ms : null,
       output,
+      failed: status === "failed",
+      cancelled: status === "cancelled",
     });
   }
 
   // A background delegation's result arrives on the poller tool
   // (get_command_or_subagent_output), whose completed update carries
-  // rawOutput { type: "TaskOutput", Result: { task_id, duration_secs,
-  // output, … } } — finish the matching card. The poller's own row in the
-  // generic tool group is untouched (this hook doesn't consume the update).
+  // rawOutput { type: "TaskOutput", Result: { task_id, duration_secs, status,
+  // output, … } } — finish the matching card. Returns true when at least one
+  // card matched, so the caller can drop the redundant poller row.
   function maybeFinishSubagentFromTaskOutput(call) {
     const out = call && call.rawOutput;
-    if (!out || out.type !== "TaskOutput") return;
+    if (!out || out.type !== "TaskOutput") return false;
     const results = [];
     if (out.Result) results.push(out.Result);
     if (Array.isArray(out.Results)) results.push(...out.Results);
+    let matched = false;
     for (const res of results) {
       const tid = res && (res.task_id || res.taskId);
       if (!tid) continue;
@@ -3008,12 +3043,45 @@
         (c) => c.dataset.taskId === String(tid) || c.dataset.subagentId === String(tid),
       );
       if (!el) continue;
+      matched = true;
+      const status = String(res.status || "completed").toLowerCase();
       finishSubagentCard(el, {
         durationMs: typeof res.duration_secs === "number" ? Math.round(res.duration_secs * 1000)
           : typeof res.duration_ms === "number" ? res.duration_ms : null,
         output: typeof res.output === "string" ? res.output : "",
+        failed: status === "failed",
+        cancelled: status === "cancelled",
       });
     }
+    return matched;
+  }
+
+  // Cold restore (session/load) flattens a background delegation's poller output
+  // to a TEXT blob instead of the structured TaskOutput above (=== Task … === /
+  // Command: [subagent:…] / … / === Output ===). Parse it back so a restored card
+  // shows its result + duration; returns true so the caller drops the redundant
+  // poller row. A backgrounded shell command polls through the same tool, so
+  // parseSubagentTaskResult returns null for non-subagent blobs (row kept).
+  function maybeFinishSubagentFromTaskText(call) {
+    const out = call && call.rawOutput;
+    const text = toolUpdateText(call)
+      || (typeof out === "string" ? out : "")
+      || (out && typeof out.text === "string" ? out.text : "")
+      || (out && typeof out.output === "string" ? out.output : "");
+    if (!text) return false;
+    const parsed = parseSubagentTaskResult(text);
+    if (!parsed) return false;
+    const el = [...state.subagentCards.values()].find(
+      (c) => c.dataset.taskId === String(parsed.taskId) || c.dataset.subagentId === String(parsed.taskId),
+    );
+    if (!el) return false;
+    finishSubagentCard(el, {
+      durationMs: parsed.durationMs,
+      output: parsed.output,
+      failed: parsed.status === "failed",
+      cancelled: parsed.status === "cancelled",
+    });
+    return true;
   }
 
   function addPlanNotice(text) {
@@ -3022,6 +3090,24 @@
     const el = document.createElement("div");
     el.className = "plan-notice";
     el.innerHTML = `${ICON.listTree}<span>${escapeHtml(text)}</span>`;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  // Automatic (context-full) compaction note. The CLI can compact at a turn's
+  // START (no active bubble — clean) OR between tool-loop passes (an agent bubble
+  // may be live). Finalize that bubble first so the notice sits BETWEEN prior
+  // content and what follows — otherwise later answer tokens reuse the pre-notice
+  // bubble and render ABOVE the notice. Text arrives as markdown (italic).
+  function addAutoCompactNotice(text) {
+    flushAgent();
+    state.activeAgentEl = null;
+    state.activeAgentRaw = "";
+    clearWelcome();
+    hideGrokking();
+    const el = document.createElement("div");
+    el.className = "plan-notice";
+    el.innerHTML = `${ICON.zap}<span>${escapeHtml(text)}</span>`;
     messagesEl.appendChild(el);
     scrollToBottom();
   }
@@ -4706,6 +4792,11 @@
           addSubagentCard(msg.call);
           break;
         }
+        // On session/load a background delegation's poller replays here as a
+        // single completed `tool_call` (structured TaskOutput or, cold-restored,
+        // a flattened text blob) — fold its result into the matching subagent
+        // card and drop the redundant "[subagent:…]" poller row.
+        if (maybeFinishSubagentFromTaskOutput(msg.call) || maybeFinishSubagentFromTaskText(msg.call)) break;
         addToToolGroup(msg.call);
         // On session/load a completed edit replays as a single `tool_call` that
         // already carries its diff (no follow-up update) — attach the preview here
@@ -4782,22 +4873,55 @@
         // tool_call_update lacks, and a completion backstop if the tool
         // channel's update never lands.
         const u = msg.update || {};
-        const cards = [...state.subagentCards.values()];
+        // A restore-built card CAN receive its own lifecycle when grok re-forwards
+        // the `_x.ai/session/update` rail on session/load (fills Composer's missing
+        // duration + the completion backstop). But a LATER LIVE spawn/finish must
+        // never touch it (that would stamp the new run onto the old card). So skip
+        // replayed cards only for live events — during replay they're eligible.
+        const cards = [...state.subagentCards.values()].filter(
+          (c) => state.replaying || !c.dataset.subagentReplayed,
+        );
         if (u.sessionUpdate === "subagent_spawned") {
-          // FIFO: spawn events arrive in the same order as their tool_calls.
-          // Done-ness is irrelevant — the tool channel's completion can race
-          // ahead of the lifecycle stream.
-          const el = cards.find((c) => !c.dataset.subagentId);
-          if (el) el.dataset.subagentId = String(u.subagent_id || "");
+          // Strict FIFO: spawn events arrive in tool-call order. Done-ness is
+          // deliberately IGNORED — a tool-channel completion routinely races
+          // ahead of the lifecycle spawn for the SAME card, so a done-but-untagged
+          // card must still be taggable by its own spawn. Only tag when there's a
+          // real id — an empty id would leave the card falsy-untagged and let the
+          // NEXT spawn steal it.
+          if (u.subagent_id) {
+            const el = cards.find((c) => !c.dataset.subagentId);
+            if (el) el.dataset.subagentId = String(u.subagent_id);
+          }
         } else if (u.sessionUpdate === "subagent_finished") {
-          let el = u.subagent_id
-            ? cards.find((c) => c.dataset.subagentId === String(u.subagent_id))
-            : undefined;
-          if (!el) el = cards.filter((c) => !c.classList.contains("subagent-done")).pop();
+          let el;
+          if (u.subagent_id) {
+            // With an id, ONLY an exact id match is safe — a stale/unknown id must
+            // not fall through to a cardinality guess and finish an unrelated
+            // running card.
+            el = cards.find((c) => c.dataset.subagentId === String(u.subagent_id));
+          } else {
+            // No id at all: attribute only when exactly ONE card is unfinished;
+            // otherwise a no-op beats guessing (the tool channel still completes
+            // the card).
+            const unfinished = cards.filter((c) => !c.classList.contains("subagent-done"));
+            if (unfinished.length === 1) el = unfinished[0];
+          }
           if (el) {
+            // subagent_finished carries status ("completed"|"failed"|"cancelled")
+            // + error (output omitted on failure) — render the outcome instead of
+            // a silent empty "success". A cancel is a user stop, not a failure, so
+            // it reads muted (not red). The synthesized note is markdown for
+            // renderMarkdown (italic *…*, which also re-escapes &<> — so no
+            // escapeHtml here or it double-escapes).
+            const status = String(u.status || "completed").toLowerCase();
+            const cancelled = status === "cancelled";
+            const failed = !cancelled && status !== "completed";
             finishSubagentCard(el, {
               durationMs: typeof u.duration_ms === "number" ? u.duration_ms : null,
-              output: typeof u.output === "string" ? u.output : "",
+              output: typeof u.output === "string" && u.output ? u.output
+                : (failed || cancelled) ? `*Subagent ${status}${u.error ? ": " + String(u.error) : ""}.*` : "",
+              failed,
+              cancelled,
             });
           }
         }
@@ -4838,6 +4962,9 @@
         break;
       case "planNotice":
         addPlanNotice(msg.text);
+        break;
+      case "autoCompactNotice":
+        addAutoCompactNotice(msg.text);
         break;
       case "planBlocked":
         addPlanNotice(

@@ -114,6 +114,21 @@ describe("command details (#41)", () => {
     const failedRow = details[1].querySelector(".cmd-out") as HTMLElement;
     expect(failedRow.classList.contains("failed")).toBe(true);
     expect(failedRow.querySelector(".cmd-out-marker")!.textContent).toBe("[Error] exit 1");
+    // The non-zero exit also rolls up to the ROW + GROUP (error at a glance,
+    // consistent with a status:"failed" tool); the exit-0 row stays clean.
+    expect(items[1].classList.contains("tool-failed")).toBe(true);
+    expect(items[0].classList.contains("tool-failed")).toBe(false);
+    expect((items[1].closest(".tool-group") as HTMLElement).classList.contains("has-error")).toBe(true);
+  });
+
+  it("a lone non-zero command flags its flattened row as failed (not just the OUT box)", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, exec("solo", "node build.js"));
+    close(window); // 1 call → flattens to .tool-flat
+    dispatch(window, out("node build.js", "boom", 1));
+    const flat = doc.querySelector(".tool-flat") as HTMLElement;
+    expect(flat.classList.contains("tool-failed")).toBe(true);
+    expect(flat.querySelector(".cmd-out-marker")!.textContent).toBe("[Error] exit 1");
   });
 
   it("an output with no matching row gets a standalone fallback row (never dropped)", () => {

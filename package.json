@@ -2,7 +2,7 @@
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build for VS Code (Community)",
   "description": "GUI for Grok Build CLI (incl. Grok 4.5). Voice control, multiple sessions, images and videos, Mermaid diagrams, and LaTeX. Works with SuperGrok, X Premium+, and xAI API key. MIT, open-source. Not affiliated with or endorsed by xAI.",
-  "version": "1.5.15",
+  "version": "1.6.1",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
@@ -223,7 +223,7 @@
             "XHigh — deepest reasoning, slowest"
           ],
           "default": "",
-          "description": "Reasoning effort passed as --reasoning-effort to grok agent stdio. Values match the grok CLI's accepted set (none, minimal, low, medium, high, xhigh). Changing this restarts the session."
+          "description": "Reasoning effort passed as --reasoning-effort to grok agent stdio. Values match the grok CLI's accepted set (none, minimal, low, medium, high, xhigh). Applies live on recent CLIs (grok 0.2.101+); older CLIs, and resetting to the model default, restart the session."
         },
         "grok.useCtrlEnterToSend": {
           "type": "boolean",
@@ -268,7 +268,7 @@
         "grok.voiceApiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "xAI API key for voice control (Speech-to-Text via `api.x.ai/v1/stt`). This is a **separate** developer key from [console.x.ai](https://console.x.ai) — it is billed pay-as-you-go and is unrelated to the Grok CLI login. Leave empty to fall back to `GROK_VOICE_API_KEY` or `XAI_API_KEY` in your workspace `.env`."
+          "markdownDescription": "Optional override key for voice Speech-to-Text (`api.x.ai/v1/stt`). **Leave empty and it just works** — the extension reuses your `grok login` token automatically. Set this (or `GROK_VOICE_API_KEY` / `XAI_API_KEY` in your workspace `.env`) only to use a dedicated [console.x.ai](https://console.x.ai) developer key instead. Setup + costs: [docs/voice-setup.md](https://github.com/PawelHuryn/grok-vscode/blob/main/docs/voice-setup.md)."
         },
         "grok.ffmpegPath": {
           "type": "string",

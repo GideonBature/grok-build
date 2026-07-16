@@ -46,6 +46,16 @@ export interface ModelInfo {
   name: string;
   description?: string;
   totalContextTokens?: number;
+  supportsReasoningEffort?: boolean;
+  /** The model's ACTIVE reasoning effort as advertised in `_meta.reasoningEffort`
+   *  — the session override (from `SessionHandle.reasoning_effort`), not merely
+   *  the catalog default; grok stamps it onto the current model. */
+  reasoningEffort?: string;
+  /** The effort levels this model OFFERS (`_meta.reasoningEfforts[].value`). Used
+   *  to avoid carrying an off-menu override into a model that doesn't offer it
+   *  (the CLI gates the flag on this menu but not the `_meta` override, so an
+   *  off-menu level could reach the backend and 400). */
+  reasoningEfforts?: string[];
 }
 
 export interface SlashCommand {
@@ -141,6 +151,14 @@ export class AcpClient extends EventEmitter {
   availableModels: ModelInfo[] = [];
   availableCommands: SlashCommand[] = [];
   lastMeta?: PromptResultMeta;
+  /**
+   * The session's effective reasoning effort. Seeded from the spawn flag
+   * (`opts.effort`), updated by a live `setReasoningEffort`, and CARRIED through a
+   * compatible `setModel` (a model switch that omits it lets the server resolve
+   * the new model's default, silently dropping a live override). `""`/undefined =
+   * the model default (nothing to carry).
+   */
+  currentReasoningEffort?: string;
 
   /**
    * Tool-call ids known to be media generations (`/imagine`, `/imagine-video`).
@@ -176,6 +194,7 @@ export class AcpClient extends EventEmitter {
 
   constructor(private opts: AcpClientOptions) {
     super();
+    this.currentReasoningEffort = this.opts.effort || undefined;
   }
 
   async start(): Promise<void> {
@@ -246,8 +265,20 @@ export class AcpClient extends EventEmitter {
       name: m.name,
       description: m.description,
       totalContextTokens: m._meta?.totalContextTokens,
+      supportsReasoningEffort: m._meta?.supportsReasoningEffort === true,
+      reasoningEffort: typeof m._meta?.reasoningEffort === "string" ? m._meta.reasoningEffort : undefined,
+      reasoningEfforts: Array.isArray(m._meta?.reasoningEfforts)
+        ? m._meta.reasoningEfforts.map((e: any) => e?.value).filter((v: unknown): v is string => typeof v === "string")
+        : undefined,
     }));
     this.currentModelId = resolveModelId(res.models?.currentModelId, this.availableModels);
+    // The active session effort is authoritative from the advertised current
+    // model (grok stamps SessionHandle.reasoning_effort onto it); fall back to
+    // the spawn flag only when it's absent.
+    this.currentReasoningEffort =
+      this.availableModels.find((m) => m.modelId === this.currentModelId)?.reasoningEffort ||
+      this.opts.effort ||
+      undefined;
     this.emit("session", res);
 
     if (modelId && modelId !== this.currentModelId) {
@@ -273,10 +304,20 @@ export class AcpClient extends EventEmitter {
         name: m.name,
         description: m.description,
         totalContextTokens: m._meta?.totalContextTokens,
+        supportsReasoningEffort: m._meta?.supportsReasoningEffort === true,
+        reasoningEffort: typeof m._meta?.reasoningEffort === "string" ? m._meta.reasoningEffort : undefined,
+      reasoningEfforts: Array.isArray(m._meta?.reasoningEfforts)
+        ? m._meta.reasoningEfforts.map((e: any) => e?.value).filter((v: unknown): v is string => typeof v === "string")
+        : undefined,
       }));
     }
     this.currentModelId =
       resolveModelId(res?.models?.currentModelId, this.availableModels) ?? this.currentModelId;
+    // Restore the session's persisted effort from the advertised current model —
+    // NOT the global spawn default — so a later model switch carries the real
+    // session override, not a stale global value.
+    const loadedEffort = this.availableModels.find((m) => m.modelId === this.currentModelId)?.reasoningEffort;
+    if (loadedEffort) this.currentReasoningEffort = loadedEffort;
     this.emit("session", { sessionId, ...(res ?? {}) });
     this.emit("sessionLoaded", { sessionId });
     if (modelId && modelId !== this.currentModelId) {
@@ -291,9 +332,22 @@ export class AcpClient extends EventEmitter {
 
   async setModel(modelId: string): Promise<void> {
     if (!this.sessionId) throw new Error("no session");
+    // Carry the live effort override through a compatible switch — a bare
+    // set_model lets the server resolve the new model's default effort, silently
+    // dropping a prior live setReasoningEffort. But ONLY carry a level the TARGET
+    // model offers: the CLI gates its flag on the per-model effort menu yet does
+    // NOT menu-check a `_meta` override, so carrying an off-menu level could reach
+    // the backend and 400. If the target advertises no menu, don't carry (let the
+    // server resolve its default) rather than risk an off-menu value.
+    const target = this.availableModels.find((m) => m.modelId === modelId);
+    const carry =
+      this.currentReasoningEffort &&
+      Array.isArray(target?.reasoningEfforts) &&
+      target!.reasoningEfforts.includes(this.currentReasoningEffort);
     const res = await this.request("session/set_model", {
       sessionId: this.sessionId,
       modelId,
+      ...(carry ? { _meta: { reasoningEffort: this.currentReasoningEffort } } : {}),
     });
     const ok = res?._meta?.model?.Ok;
     if (ok) {
@@ -309,6 +363,40 @@ export class AcpClient extends EventEmitter {
         : (resolveModelId(ok, this.availableModels) ?? ok);
       this.emit("modelChanged", this.currentModelId);
     }
+  }
+
+  /** Whether the current model advertises per-session reasoning effort
+   *  (`models[]._meta.supportsReasoningEffort`) — the gate for changing effort
+   *  live via `setReasoningEffort` instead of restarting the process. */
+  currentModelSupportsEffort(): boolean {
+    return !!this.availableModels.find((m) => m.modelId === this.currentModelId)?.supportsReasoningEffort;
+  }
+
+  /** Change reasoning effort on the LIVE session — no process restart — via
+   *  `session/set_model` with `_meta.reasoningEffort` (the same model id + an
+   *  effort override; grok applies and persists it per-session, confirmed on
+   *  0.2.101). Only a real, non-empty effort can be set this way — unsetting back
+   *  to default still needs a fresh spawn without `--reasoning-effort`. Caller
+   *  falls back to a restart on `false`/throw.
+   *
+   *  Return caveat: the boolean means the CLI *accepted the set_model call*
+   *  (`_meta.model.Ok`) — the caller gates on the model advertising
+   *  `supportsReasoningEffort`. Whether the effort was actually APPLIED is
+   *  reflected authoritatively by the `model_changed` notification (handled in
+   *  the session_notification path), which carries the EFFECTIVE effort and
+   *  updates `currentReasoningEffort`. We deliberately DON'T set that field
+   *  optimistically here: the CLI emits `model_changed` BEFORE the set_model
+   *  response, so an optimistic post-response write would clobber the true value
+   *  on a build that resolved the effort differently. */
+  async setReasoningEffort(level: string): Promise<boolean> {
+    if (!this.sessionId) throw new Error("no session");
+    if (!level) return false; // "" = unset → cannot be expressed as an override
+    const res = await this.request("session/set_model", {
+      sessionId: this.sessionId,
+      modelId: this.currentModelId,
+      _meta: { reasoningEffort: level },
+    });
+    return !!res?._meta?.model?.Ok;
   }
 
   async setMode(modeId: string): Promise<void> {
@@ -655,6 +743,22 @@ export class AcpClient extends EventEmitter {
         method === "_x.ai/session_notification" ||
         method === "x.ai/session_notification"
       ) {
+        // `model_changed` carries the EFFECTIVE reasoning effort the CLI actually
+        // applied (post-resolution) — the authoritative signal that a live
+        // set_model override took (or, on a non-conforming build, didn't). Keep
+        // `currentReasoningEffort` in sync with reality so a later model switch
+        // carries the real value, not an optimistic one.
+        const upd = params?.update as { sessionUpdate?: unknown; reasoning_effort?: unknown; model_id?: unknown } | undefined;
+        if (upd?.sessionUpdate === "model_changed") {
+          this.currentReasoningEffort =
+            typeof upd.reasoning_effort === "string" && upd.reasoning_effort ? upd.reasoning_effort : undefined;
+          // Keep the model id in sync too — a server-side model change would
+          // otherwise leave a later set_model/setReasoningEffort pointing at the
+          // stale model, silently switching it back.
+          if (typeof upd.model_id === "string" && upd.model_id) {
+            this.currentModelId = resolveModelId(upd.model_id, this.availableModels) ?? upd.model_id;
+          }
+        }
         this.emit("xaiNotification", params?.update);
         if (id != null) this.respondOk(id, {});
         return;

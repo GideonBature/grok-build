@@ -601,6 +601,28 @@ describe("Grokking… indicator (waiting placeholder)", () => {
     expect(doc.querySelector(".tool-group")).not.toBeNull();
   });
 
+  it("autoCompactNotice finalizes the active agent bubble so later tokens can't render above it", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "agentStart" });
+    dispatch(window, { type: "messageChunk", text: "Before compaction." });
+    dispatch(window, { type: "autoCompactNotice", text: "Auto-compacting context (94% full)…" });
+    dispatch(window, { type: "messageChunk", text: "After compaction." });
+    dispatch(window, { type: "promptComplete", meta: { totalTokens: 5 } }); // flush the buffered bubble
+    const notice = doc.querySelector(".plan-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("Auto-compacting context");
+    // Two distinct agent bubbles — the notice finalized the first, so "after"
+    // starts a fresh bubble instead of reusing (and reordering above) the first.
+    const bubbles = [...doc.querySelectorAll(".msg.agent")] as any[];
+    expect(bubbles.length).toBe(2);
+    expect(bubbles[0].textContent).toContain("Before compaction");
+    expect(bubbles[1].textContent).toContain("After compaction");
+    // DOM order is bubble0 → notice → bubble1 (the answer never floats above it).
+    const nodes = [...doc.querySelectorAll(".msg.agent, .plan-notice")] as any[];
+    expect(nodes.indexOf(bubbles[0])).toBeLessThan(nodes.indexOf(notice));
+    expect(nodes.indexOf(notice)).toBeLessThan(nodes.indexOf(bubbles[1]));
+  });
+
   it("shows on every turn, not just the first (a general typing indicator)", () => {
     const { window, doc } = bootWebview();
     // Turn 1 completes.

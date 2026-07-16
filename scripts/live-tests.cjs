@@ -52,7 +52,7 @@ try {
   console.error("Could not load compiled modules — run `npm run compile` (or `tsc -p .`) first.\n" + e.message);
   process.exit(2);
 }
-const { isMediaGenToolCall, extractGeneratedMediaPaths } = dispatch;
+const { isMediaGenToolCall, extractGeneratedMediaPaths, contextUsedFromCompactNotification, resolveModelId } = dispatch;
 const { shouldBlockWrite } = planGate;
 const { GROK_PRIMER } = primer;
 const { isSubagentToolCall, subagentLabel } = helpers;
@@ -108,6 +108,7 @@ class Acp {
     this.bgTasks = [];       // background tasks grok spawned (its real subagent mechanism)
     this.taskOutputCalls = []; // get_command_or_subagent_output poller tool_calls
     this.lifecycle = [];     // subagent_spawned/subagent_finished (method _x.ai/session/update)
+    this.xaiNotifs = [];     // LIVE rail: _x.ai/session_notification updates (auto_compact_completed, subagent_*, turn_completed, …) — the method the extension consumes
     this.onWrite = onWrite;  // optional per-test hook (path) => "write" | "ack"
     this.buf = "";
     const win = process.platform === "win32";
@@ -147,11 +148,19 @@ class Acp {
       return;
     }
     if (m.method === "_x.ai/session/update" || m.method === "x.ai/session/update") {
-      // Subagent lifecycle stream — the extension routes this for durations +
-      // completion (subagentLifecycle → subagentUpdate). Record it so the
-      // subagent tests can assert the events still flow.
+      // Persist/replay rail — recorded for the subagent tests' historical check.
       const u = m.params && m.params.update;
       if (u) this.lifecycle.push(u);
+      if (m.id != null) this._respond(m.id, {});
+      return;
+    }
+    if (m.method === "_x.ai/session_notification" || m.method === "x.ai/session_notification") {
+      // LIVE lifecycle rail — the method the extension's AcpClient handles
+      // (acp.ts → xaiNotification). Carries auto_compact_completed / subagent_* /
+      // turn_completed. Record so the notification-consumer features have a real
+      // release gate against CLI drift.
+      const u = m.params && m.params.update;
+      if (u) this.xaiNotifs.push(u);
       if (m.id != null) this._respond(m.id, {});
       return;
     }
@@ -801,8 +810,20 @@ async function testSubagent() {
     }
     if (acp.subagentCalls.length > 0) {
       const labels = [...new Set(acp.subagentCalls.map(subagentLabel))];
-      const finished = acp.lifecycle.filter((u) => u.sessionUpdate === "subagent_finished").length;
-      return `genuine spawn_subagent card(s): ${labels.join(", ")}; poller correctly not carded; lifecycle finished=${finished}`;
+      // Hard gate: a genuine spawn_subagent delegation must surface its lifecycle
+      // on the LIVE rail — the extension fills the card's duration/output from it
+      // (v1.6.1). A brief wait covers transport-tail timing after the turn ends.
+      await waitFor(() => acp.xaiNotifs.some((u) => u.sessionUpdate === "subagent_finished"),
+        15000, "live subagent_finished after a genuine spawn_subagent delegation");
+      const spawned = acp.xaiNotifs.filter((u) => u.sessionUpdate === "subagent_spawned");
+      const finished = acp.xaiNotifs.filter((u) => u.sessionUpdate === "subagent_finished");
+      assert(spawned.length > 0, "spawn_subagent delegated but NO live subagent_spawned arrived (wire drift)");
+      const matched = finished.find((f) => spawned.some((s) => s.subagent_id === f.subagent_id));
+      assert(matched, "no subagent_finished matched a subagent_spawned by subagent_id");
+      assert(typeof matched.duration_ms === "number" && matched.duration_ms >= 0,
+        "subagent_finished.duration_ms not a finite non-negative number: " + JSON.stringify(matched.duration_ms));
+      return `genuine spawn_subagent card(s): ${labels.join(", ")}; poller not carded; ` +
+        `live lifecycle spawned=${spawned.length} finished=${finished.length} duration_ms=${matched.duration_ms}`;
     }
     return `delegated via background task (${bgIds.size} bg spawn, ${pollIds.size} output-poll); ` +
       `poller correctly NOT carded — grok's real subagent = background shell, see research/subagents.md`;
@@ -851,15 +872,105 @@ async function testSubagentComposer() {
       subIds.has(u.toolCallId) &&
       String(u.status || "").toLowerCase() === "completed");
     assert(completed.length > 0, "Task delegation never completed on the tool channel — the card would spin forever (wire drift)");
-    // Lifecycle events are informational: grok 0.2.93 LOGS subagent_spawned/
-    // subagent_finished in updates.jsonl but does NOT transmit them over ACP
-    // (verified live). The extension routes them if that ever changes.
-    const spawned = acp.lifecycle.filter((u) => u.sessionUpdate === "subagent_spawned").length;
-    const finished = acp.lifecycle.filter((u) => u.sessionUpdate === "subagent_finished").length;
+    // Composer's tool-channel completion carries NO duration — the extension
+    // fills it from subagent_finished on the LIVE rail (v1.6.1). Since a Task
+    // delegation demonstrably ran (tool completion above), hard-gate the live
+    // lifecycle: without it, Composer cards lose their duration/output entirely.
+    await waitFor(() => acp.xaiNotifs.some((u) => u.sessionUpdate === "subagent_finished"),
+      15000, "live subagent_finished after a Composer Task delegation");
+    const liveSpawned = acp.xaiNotifs.filter((u) => u.sessionUpdate === "subagent_spawned");
+    const liveFinished = acp.xaiNotifs.filter((u) => u.sessionUpdate === "subagent_finished");
+    assert(liveSpawned.length > 0, "Composer delegated but NO live subagent_spawned arrived (wire drift)");
+    const matched = liveFinished.find((f) => liveSpawned.some((s) => s.subagent_id === f.subagent_id));
+    assert(matched, "no Composer subagent_finished matched a subagent_spawned by subagent_id");
+    assert(typeof matched.duration_ms === "number" && matched.duration_ms >= 0,
+      "Composer subagent_finished.duration_ms not finite/non-negative: " + JSON.stringify(matched.duration_ms));
     const labels = [...new Set(acp.subagentCalls.map(subagentLabel))];
     return `composer(${composer.modelId}) delegated: ${labels.join(", ") || "(bg)"}; ` +
-      `${completed.length} tool-channel completion(s); lifecycle transmitted: spawned=${spawned}, finished=${finished}` +
-      (spawned > 0 ? " — CLI now TRANSMITS lifecycle events (durations will light up)" : " (logged-only on this build)");
+      `${completed.length} tool-channel completion(s); live lifecycle spawned=${liveSpawned.length} finished=${liveFinished.length} duration_ms=${matched.duration_ms}`;
+  } finally { acp.kill(); }
+}
+
+// The context donut's post-/compact refresh (v1.6.1) rides the LIVE
+// _x.ai/session_notification rail: auto_compact_completed.tokens_after. This is
+// the drift canary — if a CLI stops emitting it, the donut silently falls back
+// to the slower /session-info scrape (and, on a build lacking that too, wouldn't
+// refresh at all). Feed the real payload through the SAME
+// contextUsedFromCompactNotification the host uses. A native /compact emits
+// auto_compact_completed (never _started), so this also pins the method name.
+async function testCompactNotification() {
+  const cwd = mkTmp("compact");
+  const acp = new Acp(cwd);
+  try {
+    let r = await withTimeout(acp.send("initialize", INIT), 30000, "init");
+    assert(!r.error, "init errored");
+    r = await withTimeout(acp.send("session/new", { cwd, mcpServers: [] }), 30000, "session/new");
+    assert(r.result && r.result.sessionId, "session/new failed: " + JSON.stringify(r.error));
+    const sessionId = r.result.sessionId;
+    // A little history so /compact has something to compress.
+    const s1 = await withTimeout(acp.send("session/prompt", { sessionId, prompt: [{ type: "text", text: "In one short sentence, say hello." }] }), 120000, "seed1");
+    assert(!s1.error, "seed1 prompt errored: " + JSON.stringify(s1.error));
+    const s2 = await withTimeout(acp.send("session/prompt", { sessionId, prompt: [{ type: "text", text: "Name one primary color. One word only." }] }), 120000, "seed2");
+    assert(!s2.error, "seed2 prompt errored: " + JSON.stringify(s2.error));
+    const before = acp.xaiNotifs.length;
+    const cr = await withTimeout(acp.send("session/prompt", { sessionId, prompt: [{ type: "text", text: "/compact" }] }), 120000, "/compact");
+    assert(!cr.error, "/compact errored: " + JSON.stringify(cr.error));
+    const fresh = acp.xaiNotifs.slice(before);
+    const completed = fresh.find((u) => u.sessionUpdate === "auto_compact_completed");
+    assert(completed, "no auto_compact_completed on _x.ai/session_notification after /compact — the v1.6.1 donut refresh would silently regress");
+    const used = contextUsedFromCompactNotification(completed);
+    assert(typeof used === "number" && used > 0,
+      "auto_compact_completed.tokens_after is not a positive number: " + JSON.stringify(completed));
+    // A MANUAL /compact must NOT emit auto_compact_started — that's the auto-only
+    // signal the "Auto-compacting…" note keys on. Live-pin the distinction.
+    const started = fresh.find((u) => u.sessionUpdate === "auto_compact_started");
+    assert(!started, "manual /compact unexpectedly emitted auto_compact_started — the auto-compact note would misfire on manual compaction");
+    return `auto_compact_completed.tokens_after=${used}, no auto_compact_started (auto/manual distinction confirmed)`;
+  } finally { acp.kill(); }
+}
+
+// Live reasoning-effort switch (v1.6.1): the model advertises
+// supportsReasoningEffort and set_model accepts an _meta.reasoningEffort override
+// with no process restart. This is a REAL application gate, not just acceptance:
+// after set_model we hard-wait for a `model_changed` notification whose
+// `reasoning_effort` equals the target — the EFFECTIVE effort the CLI applied
+// (broadcast post-resolution, model_switch.rs). A build that accepts the request
+// but ignores the override (the silent-no-op) fails here instead of lying green.
+async function testEffortLive() {
+  const cwd = mkTmp("effort");
+  const acp = new Acp(cwd);
+  try {
+    let r = await withTimeout(acp.send("initialize", INIT), 30000, "init");
+    assert(!r.error, "init errored");
+    r = await withTimeout(acp.send("session/new", { cwd, mcpServers: [] }), 30000, "session/new");
+    assert(r.result && r.result.sessionId, "session/new failed: " + JSON.stringify(r.error));
+    const sessionId = r.result.sessionId;
+    const models = (r.result.models && r.result.models.availableModels) || [];
+    const currentId = r.result.models && r.result.models.currentModelId;
+    // Resolve the current model via the REAL resolver (grok can echo a versioned
+    // id not in the list); do NOT blindly fall back to models[0].
+    const resolvedId = resolveModelId(currentId, models);
+    const cur = models.find((m) => m.modelId === resolvedId) || models.find((m) => m.modelId === currentId);
+    if (!cur || !(cur._meta && cur._meta.supportsReasoningEffort)) {
+      throw new Skip("current model does not advertise supportsReasoningEffort — live effort N/A on this build/model");
+    }
+    const advertised = cur._meta.reasoningEffort;
+    // Pick a target the model actually offers (from reasoningEfforts) that differs
+    // from the advertised one — hardcoding low/high could pick an unoffered value.
+    const offered = ((cur._meta.reasoningEfforts || []).map((e) => e && e.value).filter(Boolean));
+    const target = offered.find((e) => e !== advertised) || (advertised === "low" ? "high" : "low");
+    const before = acp.xaiNotifs.length;
+    const sr = await withTimeout(
+      acp.send("session/set_model", { sessionId, modelId: cur.modelId, _meta: { reasoningEffort: target } }),
+      30000, "set_model effort");
+    assert(!sr.error, "set_model with _meta.reasoningEffort errored: " + JSON.stringify(sr.error));
+    assert(sr.result && sr.result._meta && sr.result._meta.model && sr.result._meta.model.Ok,
+      "set_model did not return _meta.model.Ok: " + JSON.stringify(sr.result));
+    // The authoritative ack: model_changed with the EFFECTIVE effort == target.
+    await waitFor(
+      () => acp.xaiNotifs.slice(before).some((u) => u.sessionUpdate === "model_changed" && u.reasoning_effort === target),
+      10000, `model_changed with reasoning_effort=${target} (proves the override was APPLIED, not just accepted)`);
+    return `advertised=${advertised}, offered=[${offered.join(",")}]; applied reasoningEffort→${target} live, confirmed via model_changed`;
   } finally { acp.kill(); }
 }
 
@@ -875,6 +986,9 @@ const TESTS = [
   { name: "vision-prompt", fn: testVisionPrompt, slow: false },
   { name: "session-restore", fn: testRestore, slow: false },
   { name: "edit-diff-restore", fn: testEditDiffRestore, slow: false },
+  // v1.6.1 notification-rail features (drift canaries):
+  { name: "compact-notification", fn: testCompactNotification, slow: false },
+  { name: "effort-live", fn: testEffortLive, slow: false, smoke: true },
   // Now the full loop (primer -> plan -> reject -> approve, ~4 grok turns), so it's
   // slow enough to skip under --quick; the full release gate still runs it.
   { name: "plan-mode", fn: testPlanMode, slow: true },

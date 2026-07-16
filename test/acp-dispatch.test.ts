@@ -1,12 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   collectToolImages,
+  contextUsedFromCompactNotification,
+  autoCompactStartedNote,
+  isSubagentLifecycleUpdate,
   extractGeneratedMediaPaths,
   extractImageContent,
   extractPromptMeta,
   gateZeroTokenMeta,
   isMediaGenToolCall,
   isIncompatibleAgentError,
+  isAuthErrorText,
   makeAckResponse,
   makeExitPlanResponse,
   makePermissionResponse,
@@ -282,6 +286,81 @@ describe("parseSessionInfoContext (hidden post-/compact /session-info)", () => {
   });
 });
 
+describe("contextUsedFromCompactNotification (live auto_compact_completed donut)", () => {
+  // Verbatim payload captured over ACP from grok 0.2.101
+  // (research/oss-surfaces-probe.cjs --scenario=notify).
+  const REAL = {
+    sessionUpdate: "auto_compact_completed",
+    tokens_before: 15774,
+    tokens_after: 15774,
+    summary_preview: null,
+  };
+
+  it("returns tokens_after from the real payload shape", () => {
+    expect(contextUsedFromCompactNotification(REAL)).toBe(15774);
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "auto_compact_completed", tokens_after: 4200 })).toBe(4200);
+  });
+
+  it("ignores other session-notification kinds", () => {
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "subagent_finished", tokens_after: 99 })).toBeNull();
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "turn_completed" })).toBeNull();
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "model_changed" })).toBeNull();
+  });
+
+  it("returns null for a missing, zero, negative, or non-numeric tokens_after", () => {
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "auto_compact_completed" })).toBeNull();
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "auto_compact_completed", tokens_after: 0 })).toBeNull();
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "auto_compact_completed", tokens_after: -5 })).toBeNull();
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "auto_compact_completed", tokens_after: "1000" })).toBeNull();
+    expect(contextUsedFromCompactNotification({ sessionUpdate: "auto_compact_completed", tokens_after: NaN })).toBeNull();
+  });
+
+  it("is null-safe on absent / malformed updates", () => {
+    expect(contextUsedFromCompactNotification(undefined)).toBeNull();
+    expect(contextUsedFromCompactNotification(null)).toBeNull();
+    expect(contextUsedFromCompactNotification("nope")).toBeNull();
+    expect(contextUsedFromCompactNotification({})).toBeNull();
+  });
+});
+
+describe("autoCompactStartedNote (surface silent automatic compaction)", () => {
+  it("returns a note with the percentage for an auto_compact_started", () => {
+    // Shape from notification.rs AutoCompactStarted.
+    expect(autoCompactStartedNote({ sessionUpdate: "auto_compact_started", tokens_used: 480000, context_window: 512000, percentage: 94, reason: "Context window 94% full" }))
+      .toBe("Auto-compacting context (94% full)…");
+  });
+  it("omits the percentage when absent/non-numeric", () => {
+    expect(autoCompactStartedNote({ sessionUpdate: "auto_compact_started" })).toBe("Auto-compacting context…");
+    expect(autoCompactStartedNote({ sessionUpdate: "auto_compact_started", percentage: "94" })).toBe("Auto-compacting context…");
+  });
+  it("returns null for manual-compact completion and other kinds (auto-path only)", () => {
+    // A manual /compact emits only auto_compact_completed, never _started — so this
+    // never double-fires with the slash path's "Compacted.".
+    expect(autoCompactStartedNote({ sessionUpdate: "auto_compact_completed", tokens_after: 12345 })).toBeNull();
+    expect(autoCompactStartedNote({ sessionUpdate: "subagent_finished" })).toBeNull();
+    expect(autoCompactStartedNote(null)).toBeNull();
+    expect(autoCompactStartedNote({})).toBeNull();
+  });
+});
+
+describe("isSubagentLifecycleUpdate (re-routing the live rail to subagent cards)", () => {
+  it("matches the two kinds the webview cards act on (spawned, finished)", () => {
+    expect(isSubagentLifecycleUpdate({ sessionUpdate: "subagent_spawned", subagent_id: "x" })).toBe(true);
+    expect(isSubagentLifecycleUpdate({ sessionUpdate: "subagent_finished", duration_ms: 3865, tokens_used: 6821 })).toBe(true);
+  });
+  it("EXCLUDES subagent_progress (no webview behavior; ~2s cadence would spam the replay buffer)", () => {
+    expect(isSubagentLifecycleUpdate({ sessionUpdate: "subagent_progress" })).toBe(false);
+  });
+  it("does not match other notification kinds or malformed input", () => {
+    expect(isSubagentLifecycleUpdate({ sessionUpdate: "auto_compact_completed" })).toBe(false);
+    expect(isSubagentLifecycleUpdate({ sessionUpdate: "turn_completed" })).toBe(false);
+    expect(isSubagentLifecycleUpdate({})).toBe(false);
+    expect(isSubagentLifecycleUpdate(null)).toBe(false);
+    expect(isSubagentLifecycleUpdate(undefined)).toBe(false);
+    expect(isSubagentLifecycleUpdate("subagent_finished")).toBe(false);
+  });
+});
+
 describe("response builders", () => {
   it("makePermissionResponse uses ACP outcome shape", () => {
     const r = makePermissionResponse(7, "allow-once");
@@ -374,6 +453,38 @@ describe("isIncompatibleAgentError", () => {
     expect(isIncompatibleAgentError({ data: { code: "SOMETHING_ELSE" } })).toBe(false);
     expect(isIncompatibleAgentError(undefined)).toBe(false);
     expect(isIncompatibleAgentError(new Error("network timeout"))).toBe(false);
+  });
+});
+
+describe("isAuthErrorText (expired-token auto-recovery gate)", () => {
+  it("matches explicit auth/credential failures", () => {
+    expect(isAuthErrorText("401 Unauthorized")).toBe(true);
+    expect(isAuthErrorText("HTTP 403 Forbidden")).toBe(true);
+    expect(isAuthErrorText("invalid credential")).toBe(true);
+    expect(isAuthErrorText("your API key is missing")).toBe(true);
+    expect(isAuthErrorText("Please sign in again to continue")).toBe(true);
+    expect(isAuthErrorText("access token expired")).toBe(true);
+    expect(isAuthErrorText("your session has expired")).toBe(true);
+    expect(isAuthErrorText("authentication failed")).toBe(true);
+  });
+
+  it("matches the billing/entitlement phrasing an expired token masquerades as", () => {
+    // The reported symptom: a valid SuperGrok sub still shows a "pay" error when
+    // the token lapsed — this is the case the whole recovery exists for.
+    expect(isAuthErrorText("You need to pay to continue using Grok")).toBe(true);
+    expect(isAuthErrorText("Your subscription is required")).toBe(true);
+    expect(isAuthErrorText("insufficient entitlement")).toBe(true);
+    expect(isAuthErrorText("billing issue")).toBe(true);
+  });
+
+  it("does NOT match ordinary faults (no pointless reload)", () => {
+    expect(isAuthErrorText("network timeout")).toBe(false);
+    expect(isAuthErrorText("Tool call failed: file not found")).toBe(false);
+    expect(isAuthErrorText("Grok process exited (code 1)")).toBe(false);
+    expect(isAuthErrorText("the payload was too large")).toBe(false); // 'payload' must not trip 'pay'
+    expect(isAuthErrorText("")).toBe(false);
+    expect(isAuthErrorText(null)).toBe(false);
+    expect(isAuthErrorText(undefined)).toBe(false);
   });
 });
 

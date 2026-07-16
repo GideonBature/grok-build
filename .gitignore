@@ -7,3 +7,6 @@ out-integration/
 .DS_Store
 .env
 docs/codex-style-analysis.md
+
+# Runtime artifacts written by agent commands during dev/testing
+terminals/

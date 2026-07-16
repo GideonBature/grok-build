@@ -25,3 +25,6 @@ docs/backlog.md
 docs/POST_NOTES.md
 docs/issue-37-diagrams.md
 docs/codex-style-analysis.md
+
+# Runtime terminal artifacts (never ship)
+terminals/**

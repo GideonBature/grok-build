@@ -1,5 +1,14 @@
 # /compact over ACP — dispatch rules, `_meta.totalTokens` semantics, async rewrite
 
+> **v1.6.1 update (grok 0.2.101) — the donut sections below are SUPERSEDED.** The
+> host now **strips** `totalTokens: 0` (`gateZeroTokenMeta`) rather than "letting
+> the 0 through", and the post-/compact donut count rides the live
+> `_x.ai/session_notification` → `auto_compact_completed.tokens_after`
+> (`contextUsedFromCompactNotification`) as PRIMARY, with the hidden `/session-info`
+> scrape only a fallback for pre-rail CLIs. See `research/grok-build-oss-findings.md`
+> and `docs/ACP-feedback.md` §2.3. The position-0 dispatch rule and the async-rewrite
+> sections remain accurate.
+
 Probe: `research/compact-probe.cjs` (needs a logged-in grok; `VARIANT=`,
 `POST_COMPACT_WAIT_MS=`, `FILLER_BYTES=`, `GROK_BIN=` env knobs). All findings
 verified against **grok 0.2.87** on 2026-07-07, model `grok-composer-2.5-fast`.

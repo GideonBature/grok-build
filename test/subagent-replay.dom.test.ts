@@ -62,23 +62,131 @@ describe("composer-agent mixed 10-tools + 5-subagents session (real wire replay)
     expect(body.textContent).not.toContain("<response>");
   });
 
-  it("the subagent_finished lifecycle event fills in the duration Composer's completion lacks", () => {
+  it("a NEW live subagent's lifecycle does NOT tag/fill a RESTORED card (no cross-attribution)", () => {
     const { window, doc } = bootWebview();
+    // Restore wraps replay in historyReplay so cards are marked as restored —
+    // they never received their own live lifecycle (session/load strips it).
+    dispatch(window, { type: "historyReplay", active: true });
     replayAll(window);
-    const first = doc.querySelector(".subagent-card")!;
-    expect(first.querySelector(".subagent-time")!.textContent).toBe(""); // no duration on the tool channel
+    dispatch(window, { type: "historyReplay", active: false });
+    const first = doc.querySelector(".subagent-card")! as HTMLElement;
+    expect(first.querySelector(".subagent-time")!.textContent).toBe("");
 
+    // A brand-new subagent runs later. Its spawn+finish must NOT tag or fill the
+    // restored card (that would stamp the NEW run's duration/output onto the OLD
+    // card — the corruption bug). With no live card present, it's simply a no-op.
+    dispatch(window, { type: "subagentUpdate", update: { sessionUpdate: "subagent_spawned", subagent_id: "child-new" } });
     dispatch(window, {
       type: "subagentUpdate",
-      update: { sessionUpdate: "subagent_spawned", subagent_id: "child-1", subagent_type: "generalPurpose" },
+      update: { sessionUpdate: "subagent_finished", subagent_id: "child-new", status: "completed", duration_ms: 7343, output: "NEW RUN OUTPUT" },
     });
+    expect(first.querySelector(".subagent-time")!.textContent).toBe(""); // untouched
+    expect(first.dataset.subagentId).toBeUndefined(); // never tagged by the live spawn
+    expect((first.querySelector(".subagent-result") as HTMLElement).textContent || "").not.toContain("NEW RUN OUTPUT");
+  });
+
+  it("a failed subagent_finished renders the failure, not a silent empty success", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, {
+      type: "toolCall",
+      call: {
+        toolCallId: "t-fail",
+        title: "Task",
+        _meta: { "x.ai/tool": { name: "Task" } },
+        rawInput: { description: "Do a thing", subagent_type: "generalPurpose", prompt: "x" },
+      },
+    });
+    dispatch(window, { type: "subagentUpdate", update: { sessionUpdate: "subagent_spawned", subagent_id: "cf" } });
     dispatch(window, {
       type: "subagentUpdate",
-      update: { sessionUpdate: "subagent_finished", subagent_id: "child-1", status: "completed", duration_ms: 7343 },
+      update: { sessionUpdate: "subagent_finished", subagent_id: "cf", status: "failed", duration_ms: 1200, error: "tool crashed" },
     });
-    // spawned tags FIFO — but every card is already done, so the late finish
-    // only fills the duration of the matching (first) card.
-    expect(first.querySelector(".subagent-time")!.textContent).toBe("· 7s");
+    const card = doc.querySelector(".subagent-card")! as HTMLElement;
+    expect(card.classList.contains("subagent-done")).toBe(true);
+    expect(card.classList.contains("subagent-failed")).toBe(true);
+    // Visible on the row itself (red via .subagent-failed CSS), no expand needed.
+    expect((card.querySelector(".subagent-time") as HTMLElement).textContent).toContain("failed");
+    expect((card.querySelector(".subagent-result") as HTMLElement).textContent).toContain("tool crashed");
+  });
+
+  it("a restored BACKGROUND delegation shows its result + duration, and drops the redundant poller row", () => {
+    const { window, doc } = bootWebview();
+    // Real session/load order: the spawn replays (started-ack tags the child id),
+    // then the poller replays as a completed tool_call carrying the FLATTENED
+    // text blob (not the live structured TaskOutput).
+    dispatch(window, { type: "historyReplay", active: true });
+    dispatch(window, {
+      type: "toolCall",
+      call: {
+        toolCallId: "spawn-r",
+        title: "spawn_subagent",
+        status: "completed",
+        _meta: { "x.ai/tool": { name: "spawn_subagent" } },
+        rawInput: { description: "Quick subagent smoke test", subagent_type: "general-purpose", background: true },
+        content: [{ content: { text: "Subagent started in background.\nsubagent_id: 019f6aa8-d3dc-70d2-bfac-785e0e5f3e03" } }],
+      },
+    });
+    const blob = [
+      "=== Task 019f6aa8-d3dc-70d2-bfac-785e0e5f3e03 ===",
+      "Command: [subagent:general-purpose] Quick subagent smoke test",
+      "Status: completed",
+      "Duration: 18.78s",
+      "",
+      "=== Output ===",
+      "Subagent smoke test ran successfully.",
+      "",
+      "<subagent_meta>id=019f6aa8, type=general-purpose, duration_ms=18778</subagent_meta>",
+    ].join("\n");
+    dispatch(window, {
+      type: "toolCall",
+      call: { toolCallId: "poller-r", title: "get_command_or_subagent_output", status: "completed", rawInput: { task_ids: ["019f6aa8-d3dc-70d2-bfac-785e0e5f3e03"] }, content: [{ content: { text: blob } }] },
+    });
+    dispatch(window, { type: "historyReplay", active: false });
+
+    const cards = [...doc.querySelectorAll(".subagent-card")];
+    expect(cards).toHaveLength(1);
+    const card = cards[0];
+    expect(card.classList.contains("subagent-done")).toBe(true);
+    expect(card.querySelector(".subagent-title")!.textContent).toBe("Quick subagent smoke test");
+    expect(card.querySelector(".subagent-time")!.textContent).toBe("· 19s"); // 18778ms rounded
+    const body = card.querySelector(".subagent-result") as HTMLElement;
+    expect(body.textContent).toContain("Subagent smoke test ran successfully.");
+    // The poller's own "[subagent:general-purpose] …" row must NOT appear.
+    expect(doc.body.textContent || "").not.toContain("[subagent:");
+    expect(doc.querySelector(".tool-group")).toBeNull();
+  });
+
+  it("a TOOL-CHANNEL failure (completion beats the lifecycle) flags the card red", () => {
+    // Fable-flagged ordering: grok's completed tool_call_update carries
+    // status:"failed" and lands BEFORE any lifecycle event — the failure marker
+    // must still render (the earlier test only covered lifecycle-first).
+    const { window, doc } = bootWebview();
+    dispatch(window, {
+      type: "toolCall",
+      call: { toolCallId: "tc-fail", title: "Task", _meta: { "x.ai/tool": { name: "Task" } }, rawInput: { description: "Do a thing", subagent_type: "general-purpose", prompt: "x" } },
+    });
+    dispatch(window, {
+      type: "toolCallUpdate",
+      call: { toolCallId: "tc-fail", status: "failed", rawOutput: { type: "Text", text: "it exploded" } },
+    });
+    const card = doc.querySelector(".subagent-card")! as HTMLElement;
+    expect(card.classList.contains("subagent-failed")).toBe(true);
+    expect(card.querySelector(".subagent-time")!.textContent).toContain("failed");
+    expect(card.classList.contains("subagent-cancelled")).toBe(false);
+  });
+
+  it("a cancelled subagent reads muted, not red", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, {
+      type: "toolCall",
+      call: { toolCallId: "tc-cancel", title: "Task", _meta: { "x.ai/tool": { name: "Task" } }, rawInput: { description: "Do a thing", subagent_type: "general-purpose", prompt: "x" } },
+    });
+    dispatch(window, { type: "subagentUpdate", update: { sessionUpdate: "subagent_spawned", subagent_id: "cx" } });
+    dispatch(window, { type: "subagentUpdate", update: { sessionUpdate: "subagent_finished", subagent_id: "cx", status: "cancelled", duration_ms: 900 } });
+    const card = doc.querySelector(".subagent-card")! as HTMLElement;
+    expect(card.classList.contains("subagent-cancelled")).toBe(true);
+    expect(card.classList.contains("subagent-failed")).toBe(false);
+    expect(card.querySelector(".subagent-time")!.textContent).toContain("cancelled");
   });
 
   it("the lifecycle event is a completion backstop when the tool channel never completes", () => {

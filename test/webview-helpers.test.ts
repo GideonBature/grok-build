@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — plain JS module, no types
-import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, cleanSubagentOutput, shouldStickToBottom, splitMath, stripUnsupportedTex, parseAttachmentContext, parseSelectionBlocks, parseImageTags, toolFailureText, commandProgramLabel, extractToolResultOutput, computeLineDiff } from "../media/webview-helpers.js";
+import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, splitMath, stripUnsupportedTex, parseAttachmentContext, parseSelectionBlocks, parseImageTags, toolFailureText, commandProgramLabel, extractToolResultOutput, computeLineDiff } from "../media/webview-helpers.js";
 import { buildPrompt, buildPromptWithImages } from "../src/prompt-builder";
 import { makeExplicitChip, makeImplicitChip, makeImageChip } from "../src/chips";
 
@@ -561,6 +561,23 @@ describe("cleanSubagentOutput", () => {
     expect(cleanSubagentOutput(truncated)).toBe(truncated);
   });
 
+  it("strips a leading [subagent:<type>] label (shown only on restore)", () => {
+    expect(cleanSubagentOutput("[subagent:general-purpose] Counted 3 lines.")).toBe("Counted 3 lines.");
+    expect(cleanSubagentOutput("[subagent:explore]  found it")).toBe("found it");
+    // …but a mid-answer occurrence is left alone (leading-anchored).
+    const mid = "See [subagent:general-purpose] for the sub-run.";
+    expect(cleanSubagentOutput(mid)).toBe(mid);
+  });
+
+  it("strips the label BEFORE the lead-in (a label + 'response:' combo)", () => {
+    expect(cleanSubagentOutput("[subagent:explore] response: the answer")).toBe("the answer");
+  });
+
+  it("as defense, keeps only the child's words if a whole poller blob leaks in", () => {
+    const blob = "=== Task 019f6a ===\nCommand: [subagent:general-purpose] Do it\nStatus: completed\nDuration: 2.0s\n\n=== Output ===\nAll done.";
+    expect(cleanSubagentOutput(blob)).toBe("All done.");
+  });
+
   it("handles null/empty", () => {
     expect(cleanSubagentOutput(null)).toBe("");
     expect(cleanSubagentOutput("")).toBe("");
@@ -589,6 +606,60 @@ describe("cleanSubagentOutput", () => {
     // this is the shape grok used in the real session that prompted the fix.
     expect(isSubagentToolCall({ title: "run_terminal_command", rawInput: { variant: "Bash", command: "git status", is_background: false } })).toBe(false);
     expect(isSubagentToolCall({ title: "run_terminal_command", rawInput: { variant: "Bash", command: "git status" } })).toBe(false);
+  });
+});
+
+describe("parseSubagentTaskResult (restore folds a background delegation's poller blob into its card)", () => {
+  // The exact flattened shape grok replays on session/load (real capture).
+  const BLOB = [
+    "=== Task 019f6aa8-d3dc-70d2-bfac-785e0e5f3e03 ===",
+    "Command: [subagent:general-purpose] Quick subagent smoke test",
+    "Status: completed",
+    "Started: 2026-07-16T11:21:17Z",
+    "Ended: 2026-07-16T11:21:35Z",
+    "Duration: 18.78s",
+    "Exit Code: 0",
+    "Output File: ",
+    "",
+    "=== Output ===",
+    "Subagent smoke test ran successfully.",
+    "",
+    "<subagent_meta>id=019f6aa8, type=general-purpose, tool_calls=1, turns=1, duration_ms=18778</subagent_meta>",
+  ].join("\n");
+
+  it("parses task id, status, duration (prefers duration_ms), and the output section", () => {
+    const r = parseSubagentTaskResult(BLOB)!;
+    expect(r.taskId).toBe("019f6aa8-d3dc-70d2-bfac-785e0e5f3e03");
+    expect(r.status).toBe("completed");
+    expect(r.durationMs).toBe(18778); // <subagent_meta> duration_ms wins over "18.78s"
+    expect(r.failed).toBe(false);
+    expect(r.output).toContain("Subagent smoke test ran successfully.");
+    expect(cleanSubagentOutput(r.output)).toBe("Subagent smoke test ran successfully.");
+  });
+
+  it("falls back to the Duration: Ns line when no meta duration_ms is present", () => {
+    const noMeta = "=== Task t9 ===\nCommand: [subagent:explore] look\nStatus: completed\nDuration: 3.4s\n\n=== Output ===\ndone";
+    expect(parseSubagentTaskResult(noMeta)!.durationMs).toBe(3400);
+  });
+
+  it("flags a failed / cancelled task from its Status line", () => {
+    const failed = "=== Task t1 ===\nCommand: [subagent:general-purpose] x\nStatus: failed\n\n=== Output ===\nboom";
+    expect(parseSubagentTaskResult(failed)!.failed).toBe(true);
+    const cancelled = "=== Task t2 ===\nCommand: [subagent:general-purpose] x\nStatus: cancelled\n\n=== Output ===\n";
+    expect(parseSubagentTaskResult(cancelled)!.status).toBe("cancelled");
+  });
+
+  it("returns null for a backgrounded shell COMMAND poll (same tool, not a subagent)", () => {
+    // get_command_or_subagent_output also polls plain background commands — those
+    // must stay as a normal tool row, so no subagent marker => null.
+    const cmd = "=== Task t3 ===\nCommand: node build.js\nStatus: completed\n\n=== Output ===\nBuilt OK";
+    expect(parseSubagentTaskResult(cmd)).toBeNull();
+  });
+
+  it("returns null when the blob isn't a task-output envelope at all", () => {
+    expect(parseSubagentTaskResult("just some agent prose")).toBeNull();
+    expect(parseSubagentTaskResult("")).toBeNull();
+    expect(parseSubagentTaskResult(null as any)).toBeNull();
   });
 });
 
@@ -837,6 +908,28 @@ describe("commandProgramLabel", () => {
 
   it("skips leading FOO=bar env assignments", () => {
     expect(commandProgramLabel("DEBUG=1 node app.js")).toBe("node app.js");
+  });
+
+  it("strips a `(cd dir ; cmd)` subshell and skips the cd prelude (grok's navigate-then-run idiom)", () => {
+    // The reported "Run (cd" — should name the command that does the work, not the
+    // `(cd` plumbing. This POSIX subshell is what grok emits even against PowerShell.
+    expect(commandProgramLabel('(cd "c:\\GitHub\\grok-build-vscode" ; node research/auto-compact-probe.cjs)')).toBe("node");
+    expect(commandProgramLabel("(cd dir ; git status)")).toBe("git status");
+    expect(commandProgramLabel("(cd a && cd b && node build.js)")).toBe("node build.js");
+    expect(commandProgramLabel("(npm test)")).toBe("npm test"); // subshell, no cd prelude
+    expect(commandProgramLabel("(cd foo)")).toBe("cd foo"); // a lone cd still shows cd
+  });
+
+  it("only reinterprets cd inside a () subshell — a user-typed cd chain is left alone", () => {
+    expect(commandProgramLabel("cd src && npm test")).toBe("cd src"); // unchanged (regression guard)
+  });
+
+  it("does not append a path/filename argument as if it were a subcommand", () => {
+    // A token containing a path separator is an argument, not a `git status`-style verb.
+    expect(commandProgramLabel("node research/auto-compact-probe.cjs")).toBe("node");
+    expect(commandProgramLabel("python scripts/run.py")).toBe("python");
+    // …but a bare filename with no path separator is still kept (unchanged).
+    expect(commandProgramLabel("node build.js")).toBe("node build.js");
   });
 
   it("caps very long labels", () => {

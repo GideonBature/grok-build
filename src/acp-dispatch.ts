@@ -278,15 +278,75 @@ export function gateZeroTokenMeta(meta: PromptResultMeta): PromptResultMeta {
 }
 
 /**
+ * The fresh post-compaction context size from an `_x.ai/session_notification`
+ * update, or `null` when the update isn't a compaction-completed event or
+ * carries no usable count. grok fires `auto_compact_completed` on BOTH a manual
+ * `/compact` and the CLI's automatic compaction; `tokens_after` is the
+ * post-compact used-token count. This live notification is the only instant
+ * source of that number — the compact turn's own meta reports 0 (see
+ * `gateZeroTokenMeta`) and signals.json keeps the pre-compact count until the
+ * next inference turn's flush (research/oss-surfaces-probe.cjs, grok 0.2.101).
+ * The donut tracks the context window itself (from `modelChanged`), so only
+ * `used` is returned; a zero/negative/non-numeric `tokens_after` yields `null`
+ * (the donut keeps its last real value).
+ */
+export function contextUsedFromCompactNotification(update: unknown): number | null {
+  const u = update as { sessionUpdate?: unknown; tokens_after?: unknown } | null | undefined;
+  if (!u || u.sessionUpdate !== "auto_compact_completed") return null;
+  const used = u.tokens_after;
+  return typeof used === "number" && Number.isFinite(used) && used > 0 ? used : null;
+}
+
+/**
+ * True when an `_x.ai/session_notification` update is a subagent lifecycle event
+ * the webview's cards ACT ON — `subagent_spawned` (tags the card with the child
+ * id) or `subagent_finished` (fills `duration_ms` + the child's output, which the
+ * Composer agent's tool-channel completion lacks). These ride the LIVE
+ * notification rail; the webview's `subagentUpdate` handler was historically fed
+ * by the persist/replay `_x.ai/session/update` rail (which never carried them
+ * live — grok 0.2.93 only logged them), so re-routing the live events there
+ * activates the existing card logic. **`subagent_progress` is deliberately
+ * EXCLUDED** — the webview has no behavior for it, and upstream can emit it every
+ * ~2s, so routing it would only pile up no-op entries in the session replay
+ * buffer.
+ */
+export function isSubagentLifecycleUpdate(update: unknown): boolean {
+  const k = (update as { sessionUpdate?: unknown } | null | undefined)?.sessionUpdate;
+  return k === "subagent_spawned" || k === "subagent_finished";
+}
+
+/**
+ * A user-facing note for the CLI's AUTOMATIC (context-full) compaction, or null
+ * when the update isn't an `auto_compact_started`. This fires ONLY on the
+ * auto-compaction path (`compaction.rs` — `run_compact` for a manual `/compact`
+ * emits only `auto_compact_completed`, never `_started`), so it cleanly
+ * distinguishes the two: a manual `/compact` already paints "Compacted." from
+ * the slash-command path, while automatic compaction was previously silent — the
+ * turn's context would just shrink with no explanation. Auto-compaction runs
+ * before a sampling attempt — usually at a turn's start, but possibly between
+ * tool-loop passes — so the host renders it as a dedicated notice (not a message
+ * chunk) that finalizes any active bubble first. Plain text (styled as a notice);
+ * percentage included when present.
+ */
+export function autoCompactStartedNote(update: unknown): string | null {
+  const u = update as { sessionUpdate?: unknown; percentage?: unknown } | null | undefined;
+  if (!u || u.sessionUpdate !== "auto_compact_started") return null;
+  const pct = typeof u.percentage === "number" && Number.isFinite(u.percentage) ? u.percentage : null;
+  return pct != null
+    ? `Auto-compacting context (${pct}% full)…`
+    : `Auto-compacting context…`;
+}
+
+/**
  * Parse the context line out of `/session-info`'s reply text — grok 0.2.x
- * renders `**Context:** 16017 / 512000 tokens (3%)`. This is the ONLY place
- * the post-compact size exists before the next inference turn (the compact
- * turn's meta reports 0, and signals.json keeps the pre-compact count until a
- * later turn-end flush — research/signals-refresh-probe.cjs), so the host
- * runs a hidden /session-info right after /compact and feeds this to the
- * donut. Tolerant of bold markers, casing, and thousands separators; null
- * when the line is missing or the numbers don't parse (callers fall back
- * silently — the post-compact re-prime's signals.json read is the backup).
+ * renders `**Context:** 16017 / 512000 tokens (3%)`. The post-/compact donut
+ * refresh prefers the live `auto_compact_completed` notification
+ * (`contextUsedFromCompactNotification`); this parser drives the hidden
+ * /session-info FALLBACK for CLIs that predate that rail (e.g. the Windows
+ * downgrade target). Tolerant of bold markers, casing, and thousands
+ * separators; null when the line is missing or the numbers don't parse
+ * (callers fall back silently — the post-compact re-prime's signals.json read
+ * is the second backup).
  */
 export function parseSessionInfoContext(text: string): { used: number; window: number } | null {
   const m = /context:\*{0,2}\s*([\d][\d,]*)\s*\/\s*([\d][\d,]*)\s*tokens/i.exec(text ?? "");
@@ -313,8 +373,15 @@ export function makeExitPlanResponse(
   if (verdict === "approved") {
     return { jsonrpc: "2.0", id, result: { outcome: "approved" } };
   }
-  // Reject and Abandon must be sent as JSON-RPC errors — the CLI treats any
-  // successful result as approval regardless of the outcome value.
+  // Reject and Abandon are sent as JSON-RPC errors. NOTE: the old rationale here
+  // ("the CLI treats any successful result as approval") is obsolete — grok
+  // 0.2.101 DOES honor a success `{outcome:"cancelled"|"abandoned"}` (mode stays
+  // plan on cancel; probe: research/oss-surfaces-probe.cjs --scenario=planoutcome).
+  // We keep the error form for now on purpose: our verdict UX is driven by the
+  // hidden primer + `[Plan approved/rejected/cancelled]` follow-up markers and the
+  // client-side gate, and switching to the outcome protocol touches that whole
+  // flow — deferred until plan-mode enforcement stabilizes CLI-side (§2.1). The
+  // error path keeps the session in plan mode, which is what we need meanwhile.
   const message = verdict === "rejected" ? "User rejected the plan" : "User abandoned the plan";
   return { jsonrpc: "2.0", id, error: { code: -32000, message } };
 }
@@ -381,6 +448,25 @@ export function isIncompatibleAgentError(err: any): boolean {
   if (err?.data?.code === "MODEL_SWITCH_INCOMPATIBLE_AGENT") return true;
   // Fallback if a future CLI keeps the message but drops the structured code.
   return /requires agent .+ but the active agent/i.test(err?.message ?? "");
+}
+
+/**
+ * True when a turn error looks like an expired/invalid credential rather than a
+ * real fault. A long-lived pooled `grok agent stdio` process can wedge on an
+ * expired OAuth access token when its 401-refresh loses a rotation race with the
+ * sibling processes (or `grok login`) that share `~/.grok/auth.json`; the API
+ * then rejects it, and an expired token routinely surfaces as a misleading
+ * "you need to pay" / subscription error because the service can't read the
+ * entitlement without a valid token. The host uses this to transparently restart
+ * the wedged process (a fresh one re-reads the current disk token) instead of
+ * making the user sign out and back in. Kept deliberately broad — a false match
+ * costs one guarded reload, then the real error surfaces on the retry.
+ */
+export function isAuthErrorText(msg: unknown): boolean {
+  const s = String(msg ?? "");
+  if (/\b(401|403)\b|unauthor|forbidden|\bcredential|\bapi[_\s-]?key\b|not (?:signed|logged) ?in|(?:sign|log) ?in again|re-?login|authenticat\w*\s*(?:failed|required|error|expired)|token (?:has )?expired|expired\s+token|session (?:has )?expired/i.test(s)) return true;
+  // An expired token frequently masquerades as a billing/entitlement message.
+  return /\bpay(?:ment)?\b|\bbilling\b|\bsubscription\b|\bentitl\w+|\bunpaid\b|\bcredits?\s+(?:exhaust|remain|requir)/i.test(s);
 }
 
 /**
