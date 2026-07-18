@@ -27,6 +27,7 @@ was made against; a section without a date here predates this log and is covered
 
 | Date | grok CLI | What changed |
 |---|---|---|
+| **2026-07-18** | **0.2.101** | **§2.13 (new) — rate-limit errors carry no reset time and no quota telemetry.** A weekly/usage limit surfaces as `-32003` with deliberately vague copy ("try again later"); no reset date exists anywhere on the wire, and there is no used/remaining signal a client could use to warn *before* the wall. User-reported ([#57](https://github.com/phuryn/grok-build-vscode/issues/57)) — the billing-flavored wording also misread as an auth failure in our client (fixed in extension v1.7.2 by classifying `-32003` first). |
 | **2026-07-17** | **0.2.101** | **§2.12 (new) — `session/fork`'s `targetPromptIndex` truncates `chat_history.jsonl` but NOT `updates.jsonl`**, so a fork-at-a-point replays a conversation the model has forgotten; we ship whole-session forking only as a result. Also **two unadvertised RPCs probe-confirmed WORKING and now shipped in the extension**: `x.ai/interject` (mid-turn steering — the model obeys mid-stream and the turn still ends `end_turn`, i.e. it is genuinely not a cancel) backs the new Steer button, and `x.ai/session/fork` backs Fork. Both are `_`-prefixed, unadvertised, and therefore feature-gated client-side on -32601. Separately, `_meta.usage` (per-prompt billing, incl. `modelUsage`) exists and we had been dropping it; **no cache-creation field exists anywhere**. |
 | **2026-07-16** | **OSS tree** | **Source-verified pass over every section** (the CLI went open source). §2.11's root cause found — grok silently merges `~/.claude/settings.json` permission rules; confirmed on our dev box. §2.4 corrected: the lifecycle events DO transmit live, on `x.ai/session_notification` (we watched the persist rail). §2.1's rejection-outcome ask withdrawn — a success `{outcome:"cancelled"}` response already exists (our client gap). §2.6: session list/search/rename/delete/fork exist as unadvertised `x.ai/*` methods. §2.7 corrected: reasoning effort IS session-settable via `set_model` `_meta`. §2.9: an undocumented `GROK_SHELL` override realigns the model's shell hints. Citations + sketch fixes added throughout. |
 | **2026-07-15** | **0.2.101** | **§2.1 — the headline defect is FIXED.** A rejection of `x.ai/exit_plan_mode` is now honored. **One new, still-open hole:** plan mode gates the *edit* tool but **not** `terminal/create`, so a shell command can mutate the workspace during planning. |
@@ -642,6 +643,40 @@ the two logs disagree.
 client can trim its own replay). Note the TUI's `/fork` documents `--at <turn>` as "not supported in
 this version" — so this may simply be an unfinished path that the ACP surface exposes early, rather
 than a regression.
+
+---
+
+### 2.13 Rate-limit errors carry no reset time and no quota telemetry
+
+**Build:** 0.2.101. **Source:** `xai-grok-shell/src/sampling/error.rs`,
+`xai-grok-pager/src/app/dispatch/billing.rs`. **User report:** [#57](https://github.com/phuryn/grok-build-vscode/issues/57).
+
+An HTTP 429 maps to ACP error **`-32003` "Rate limited"** with the backend detail in `data` (a
+bare string, or the `{message, promptUsage?}` object `attach_prompt_usage` produces —
+`sampling/error.rs:18,82`). The documented contract is that clients suppress the detail and show
+friendly copy — and that copy is deliberately vague: the free-usage message "promises no reset
+duration — the quota window is backend-config-driven" (`billing.rs:113-115`), and the OAuth/plan
+copy is "Upgrade your account or try again later."
+
+**Consequence (the #57 report):** a user who hits the weekly limit gets no answer to the two
+questions that actually matter — *when does it reset?* and *how close was I?* Worse, the wording
+is billing-flavored ("subscription", "upgrade"), which reads as an account/auth problem; our own
+broad expired-token classifier caught it and the recovery ended on the **login screen** (fixed in
+extension v1.7.2 by classifying `-32003` before the auth heuristics). Even fixed, the best any
+client can honestly render is "usage limit reached, try again later."
+
+**What a client needs, in order of value:**
+
+1. **A machine-readable reset timestamp** in the `-32003` `data`. A 429 normally carries
+   `Retry-After` / rate-limit-reset headers at the HTTP layer, so the information likely exists
+   upstream and is dropped when the response is flattened to a message string.
+2. **Ongoing quota state — used/limit or a percentage — as a per-turn signal**, e.g. on the
+   existing `_meta.usage` / `turn_completed.usage` rails or a `session_notification`. Today the
+   first sign of the limit is the hard stop; with a usage figure a client can show "82% of your
+   weekly limit" and warn *before* the wall, which is when the information is actually useful.
+
+**Ask:** announce dates and limits — a reset timestamp in the rate-limit error, and quota
+used/limit (or %) as a turn-level signal rather than a post-mortem.
 
 ---
 
