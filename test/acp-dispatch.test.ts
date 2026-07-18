@@ -14,10 +14,14 @@ import {
   isIncompatibleAgentError,
   isMethodNotFoundError,
   isAuthErrorText,
+  isCredentialError,
   isRateLimitError,
   isRateLimitErrorText,
+  entitlementNoticeText,
+  errorDetail,
   promptErrorText,
   rateLimitNoticeText,
+  AUTH_REQUIRED_ERROR_CODE,
   RATE_LIMITED_ERROR_CODE,
   usageIsRealMeasurement,
   makeAckResponse,
@@ -568,6 +572,78 @@ describe("rate-limit classification (#57 — a usage limit is not an auth proble
     expect(promptErrorText({ code: RATE_LIMITED_ERROR_CODE, message: "Rate limited", data: WEEKLY_COPY })).toMatch(/Usage limit reached/);
     expect(promptErrorText({ code: -32603, message: "Internal error", data: { message: "boom" } })).toBe("boom");
     expect(promptErrorText(new Error("plain failure"))).toBe("plain failure");
+  });
+});
+
+describe("credential vs entitlement classification (#58 — a missing subscription is not a sign-in problem)", () => {
+  // The CLI's error contract (OSS sampling/error.rs + session_setup.rs):
+  // 401 / internal auth failures → -32000 with one of two FIXED strings;
+  // 403 → plain internal_error (-32603) carrying the backend's message —
+  // deliberately NOT auth, because the credential was accepted.
+  const SESSION_EXPIRED = "Session expired. Run `grok login` to re-authenticate.";
+  const AUTH_FAILED = "Authentication failed. Run `grok login`, set XAI_API_KEY, or add api_key to ~/.grok/config.toml.";
+  const SUBSCRIPTION_403 = "The model 'grok-build' requires a Grok subscription.";
+  // The CLI appends this when XAI_API_KEY is set but a cached OAuth session
+  // shadows it — advice the sign-in overlay would exactly invert.
+  const SUBSCRIPTION_403_WITH_KEY_HINT =
+    SUBSCRIPTION_403 +
+    "\n\nYou have an API key set (XAI_API_KEY). Your cached OAuth session is being used instead. " +
+    "To use your API key, run `grok logout` or type /logout in the TUI.";
+
+  it("isCredentialError: the structured -32000 auth_required code wins regardless of wording", () => {
+    expect(isCredentialError({ code: AUTH_REQUIRED_ERROR_CODE, message: "odd wording" })).toBe(true);
+    expect(isCredentialError({ code: -32603, message: "Internal error", data: "boom" })).toBe(false);
+  });
+
+  it("isCredentialError: matches the CLI's fixed credential strings", () => {
+    expect(isCredentialError({ code: -32603, data: SESSION_EXPIRED })).toBe(true);
+    expect(isCredentialError({ code: -32603, data: AUTH_FAILED })).toBe(true);
+    expect(isCredentialError(new Error("Not logged in. Run `grok login`."))).toBe(true);
+    expect(isCredentialError(new Error("401 Unauthorized"))).toBe(true);
+    expect(isCredentialError(new Error("invalid API key"))).toBe(true);
+  });
+
+  it("isCredentialError: entitlement / 403 / policy texts are NOT credential problems", () => {
+    expect(isCredentialError({ code: -32603, data: SUBSCRIPTION_403 })).toBe(false);
+    // The key-hint variant contains "API key" — must still not route to the overlay.
+    expect(isCredentialError({ code: -32603, data: SUBSCRIPTION_403_WITH_KEY_HINT })).toBe(false);
+    expect(isCredentialError(new Error("403 Forbidden"))).toBe(false);
+    expect(isCredentialError(new Error("Content violates usage guidelines. Failed check: SAFETY_CHECK_TYPE_DATA_LEAKAGE"))).toBe(false);
+    expect(isCredentialError(new Error("You hit your weekly limit."))).toBe(false);
+    expect(isCredentialError(new Error("network timeout"))).toBe(false);
+  });
+
+  it("isAuthErrorText still gates recovery for BOTH families (one cheap reload is right either way)", () => {
+    expect(isAuthErrorText(SESSION_EXPIRED)).toBe(true);
+    expect(isAuthErrorText(SUBSCRIPTION_403)).toBe(true);
+  });
+
+  it("entitlementNoticeText: not-a-sign-in lead + no-access diagnosis + the CLI's verbatim advice", () => {
+    const notice = entitlementNoticeText({ code: -32603, data: SUBSCRIPTION_403_WITH_KEY_HINT });
+    expect(notice).toMatch(/not a sign-in issue/i);
+    expect(notice).toMatch(/doesn't have Grok Build access/);
+    expect(notice).toContain(SUBSCRIPTION_403);
+    expect(notice).toContain("grok logout"); // the shadowed-key hint must survive verbatim
+  });
+
+  it("entitlementNoticeText: generic billing wording is not over-diagnosed as missing access", () => {
+    const notice = entitlementNoticeText({ code: -32603, data: "Your account has an unpaid balance." });
+    expect(notice).toMatch(/not a sign-in issue/i);
+    expect(notice).not.toMatch(/doesn't have Grok Build access/);
+    expect(notice).toContain("Your account has an unpaid balance.");
+  });
+
+  it("promptErrorText routes the entitlement family to the notice, credential text stays raw", () => {
+    expect(promptErrorText({ code: -32603, data: SUBSCRIPTION_403 })).toMatch(/not a sign-in issue/i);
+    // Credential errors are the overlay's business — the text passes through untouched.
+    expect(promptErrorText({ code: AUTH_REQUIRED_ERROR_CODE, data: SESSION_EXPIRED })).toBe(SESSION_EXPIRED);
+    expect(promptErrorText({ code: -32603, data: SESSION_EXPIRED })).toBe(SESSION_EXPIRED);
+  });
+
+  it("errorDetail: bare-string data, {message} data, message fallback", () => {
+    expect(errorDetail({ code: -32603, message: "Internal error", data: SUBSCRIPTION_403 })).toBe(SUBSCRIPTION_403);
+    expect(errorDetail({ code: -32603, data: { message: "boom" } })).toBe("boom");
+    expect(errorDetail(new Error("plain failure"))).toBe("plain failure");
   });
 });
 

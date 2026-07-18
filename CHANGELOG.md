@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.3 — 2026-07-18
+
+### Fixed
+
+- **A missing Grok Build subscription/entitlement no longer traps you on the sign-in screen.** The backend's 403 *"requires a Grok subscription"* (which sign-in can't fix — the CLI even ignores your `XAI_API_KEY` while a cached OAuth session exists) now shows a clear in-chat "Not a sign-in issue" notice carrying the CLI's own advice, instead of the auth overlay. Only a genuine credential failure (ACP `-32000`, or unambiguous credential wording) opens the sign-in screen. ([#58](https://github.com/phuryn/grok-build-vscode/issues/58); [src/acp-dispatch.ts](src/acp-dispatch.ts), [src/sidebar.ts](src/sidebar.ts))
+- **The "Grokking" indicator no longer sticks forever when auth recovery ends on the sign-in screen** — the failed turn now closes properly (error state, busy cleared), and a stale sign-in overlay can't resurrect when switching back to the session. ([media/chat.js](media/chat.js), [src/sidebar.ts](src/sidebar.ts))
+- The sign-in screen now warns that a cached sign-in shadows `XAI_API_KEY` (`grok logout` to use the key). ([media/chat.js](media/chat.js))
+
 ## 1.7.2 — 2026-07-18
 
 ### Fixed

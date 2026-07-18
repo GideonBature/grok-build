@@ -556,13 +556,13 @@ export function isIncompatibleAgentError(err: any): boolean {
  * True when a turn error looks like an expired/invalid credential rather than a
  * real fault. A long-lived pooled `grok agent stdio` process can wedge on an
  * expired OAuth access token when its 401-refresh loses a rotation race with the
- * sibling processes (or `grok login`) that share `~/.grok/auth.json`; the API
- * then rejects it, and an expired token routinely surfaces as a misleading
- * "you need to pay" / subscription error because the service can't read the
- * entitlement without a valid token. The host uses this to transparently restart
- * the wedged process (a fresh one re-reads the current disk token) instead of
- * making the user sign out and back in. Kept deliberately broad — a false match
- * costs one guarded reload, then the real error surfaces on the retry.
+ * sibling processes (or `grok login`) that share `~/.grok/auth.json`; a fresh
+ * process re-reads the current disk token, so the host transparently restarts
+ * the wedged process instead of making the user sign out and back in. Kept
+ * deliberately broad — this is ONLY the gate for that one guarded reload+retry,
+ * never for what the retry's failure ultimately shows (that split is
+ * `isCredentialError` vs `entitlementNoticeText`, #58): a false match costs one
+ * reload, then the real error surfaces on the retry.
  * A rate/usage-limit message yields to `isRateLimitErrorText` first (#57): a
  * weekly-limit error carries the same billing-flavored wording, but routing it
  * here ends on the login screen, which can't fix a limit.
@@ -571,8 +571,39 @@ export function isAuthErrorText(msg: unknown): boolean {
   const s = String(msg ?? "");
   if (isRateLimitErrorText(s)) return false;
   if (/\b(401|403)\b|unauthor|forbidden|\bcredential|\bapi[_\s-]?key\b|not (?:signed|logged) ?in|(?:sign|log) ?in again|re-?login|authenticat\w*\s*(?:failed|required|error|expired)|token (?:has )?expired|expired\s+token|session (?:has )?expired/i.test(s)) return true;
-  // An expired token frequently masquerades as a billing/entitlement message.
+  // Billing/entitlement wording joins the retry gate: it CAN be a wedged token,
+  // and if it isn't, the retry's failure shows the entitlement notice instead.
   return /\bpay(?:ment)?\b|\bbilling\b|\bsubscription\b|\bentitl\w+|\bunpaid\b|\bcredits?\s+(?:exhaust|remain|requir)/i.test(s);
+}
+
+/**
+ * ACP error code for a genuine credential failure (`auth_required`). The CLI
+ * funnels EVERY prompt-turn auth failure (HTTP 401 / its internal Auth error)
+ * through this code with one of two fixed "Session expired… / Authentication
+ * failed… run `grok login`" strings (OSS `session_setup.rs` `to_acp_error` +
+ * `auth_method.rs`), which makes the code the authoritative credential signal.
+ */
+export const AUTH_REQUIRED_ERROR_CODE = -32000;
+
+/**
+ * True when a turn failure is a genuine CREDENTIAL problem — the thing a
+ * re-login can actually fix — as opposed to the billing/entitlement family that
+ * merely *sounds* like one (#58). Primary signal: the structured
+ * `AUTH_REQUIRED_ERROR_CODE`; the text branch is the fallback for surfaces that
+ * flatten the error. The text branch deliberately EXCLUDES `403`/`forbidden`
+ * (the CLI maps 403 to a plain internal error precisely because the credential
+ * was accepted — entitlement/content-policy, not auth), bare "api key" (the
+ * CLI's 403-subscription message can embed "You have an API key set
+ * (XAI_API_KEY)… run `grok logout`" — advice the login overlay would invert),
+ * and all billing wording. Only this classifier may route to the sign-in
+ * overlay; everything else shows in chat.
+ */
+export function isCredentialError(err: unknown): boolean {
+  const e = err as any;
+  if (e?.code === AUTH_REQUIRED_ERROR_CODE) return true;
+  const s = errorDetail(e);
+  if (isRateLimitErrorText(s)) return false;
+  return /\b401\b|unauthor|\bcredential|not (?:signed|logged) ?in|(?:sign|log) ?in again|re-?login|authenticat\w*\s*(?:failed|required|error|expired)|token (?:has )?expired|expired\s+token|session (?:has )?expired|invalid\s+api[_\s-]?key|api[_\s-]?key\s+(?:is\s+)?(?:invalid|expired|revoked|missing)/i.test(s);
 }
 
 /**
@@ -588,8 +619,11 @@ const GENERIC_RATE_LIMIT_TEXT =
   "You\u{2019}ve hit the rate limit for your plan. Upgrade your account or try again later.";
 
 /** The human detail a grok ACP error carries: `data` is either the bare detail
- *  string or a `{message}` object (the CLI's attach_prompt_usage wrapper). */
-function errorDetail(err: any): string {
+ *  string or a `{message}` object (the CLI's attach_prompt_usage wrapper).
+ *  Exported so host error surfaces read the same field order — the ad-hoc
+ *  `e?.data?.message ?? e?.message` they used dropped the bare-string `data`
+ *  shape, classifying real detail as the generic "Internal error" envelope. */
+export function errorDetail(err: any): string {
   const d = err?.data;
   if (typeof d === "string") return d;
   if (typeof d?.message === "string") return d.message;
@@ -638,13 +672,34 @@ export function rateLimitNoticeText(err: unknown): string {
 }
 
 /**
+ * User-facing notice for a billing/entitlement-flavored turn failure that is
+ * NOT a credential problem (#58). Leads with the not-a-sign-in clarification —
+ * the reported loop was exactly "no entitlement → sign-in screen → sign-in
+ * can't fix it". The "no Grok Build access" diagnosis is added only when the
+ * wording actually says subscription/entitlement (a generic billing message
+ * must not be over-diagnosed). The CLI's own text carries the actionable
+ * advice — including its "API key shadowed by cached OAuth session → run
+ * `grok logout`" hint — so it's shown verbatim.
+ */
+export function entitlementNoticeText(err: unknown): string {
+  const detail = errorDetail(err).trim();
+  const noAccess = /\bsubscription\b|\bentitl/i.test(detail)
+    ? "This account doesn't have Grok Build access (it needs SuperGrok or X Premium+ — or sign out to use an XAI_API_KEY instead). "
+    : "";
+  return `Not a sign-in issue \u{2014} signing in again won't fix this. ${noAccess}${detail}`;
+}
+
+/**
  * The text a failed prompt turn surfaces in chat: the friendly limit notice
- * for a rate-limited error, else the error's own message.
+ * for a rate-limited error, the entitlement notice for billing-flavored
+ * wording that is not a credential failure (#58), else the error's own
+ * message.
  */
 export function promptErrorText(err: unknown): string {
   if (isRateLimitError(err)) return rateLimitNoticeText(err);
-  const e = err as any;
-  return e?.data?.message ?? e?.message ?? String(err);
+  const detail = errorDetail(err);
+  if (!isCredentialError(err) && isAuthErrorText(detail)) return entitlementNoticeText(err);
+  return detail;
 }
 
 /**

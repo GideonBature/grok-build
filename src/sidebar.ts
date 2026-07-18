@@ -11,7 +11,7 @@ import { resolveVoiceKey, extractGrokAuthKey, parseVoiceCommand, DEFAULT_SEND_PH
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
 import type { PromptResultMeta } from "./acp-dispatch";
-import { MediaRef, addUsage, autoCompactStartedNote, contextUsedFromCompactNotification, gateZeroTokenMeta, isAuthErrorText, isIncompatibleAgentError, isRateLimitError, isSubagentLifecycleUpdate, parseSessionInfoContext, permissionOutcomeFor, promptErrorText, rateLimitNoticeText, summarizeBackgroundCommand, usageIsRealMeasurement } from "./acp-dispatch";
+import { MediaRef, addUsage, autoCompactStartedNote, contextUsedFromCompactNotification, errorDetail, gateZeroTokenMeta, isAuthErrorText, isCredentialError, isIncompatibleAgentError, isRateLimitError, isSubagentLifecycleUpdate, parseSessionInfoContext, permissionOutcomeFor, promptErrorText, rateLimitNoticeText, summarizeBackgroundCommand, usageIsRealMeasurement } from "./acp-dispatch";
 import { modeToRemember, startsInYolo } from "./mode-prefs";
 import { GROK_VIEW_ID, moveViewContainerFor } from "./view-move";
 import {
@@ -1526,6 +1526,10 @@ See design doc for the full state machine diagram.`;
     session.titleGenerated = false;
     session.firstUserMessageForTitle = undefined;
     session.priming = true;
+    // session.authRecoveryTried deliberately NOT reset here: recoverAuthAndResend
+    // calls startSession as its own retry, and a reset would let an entitlement
+    // failure (#58) pay a full restart+resend cycle on every prompt. Only a clean
+    // turn re-arms it.
     this.emit(session, { type: "modeChanged", modeId: session.autoApprove ? "yolo" : "agent" });
     if (configAutoApprove) this.noticeAlwaysApproveOnce();
     if (resumeId) this.emit(session, { type: "clearMessages" });
@@ -2032,7 +2036,10 @@ See design doc for the full state machine diagram.`;
       this.pool.delete(session);
       session.priming = false;
       this.emit(session, { type: "setBusy", value: false });
-      if (/auth|unauthor|forbidden|401|403|api[_\s-]?key|credential|sign.?in/i.test(msg)) {
+      // No `403`/`forbidden` here: the CLI deliberately does NOT map 403 to an
+      // auth failure (entitlement/policy, which sign-in can't fix — #58); a
+      // startup error carrying that wording surfaces as a plain error below.
+      if (/auth|unauthor|401|api[_\s-]?key|credential|sign.?in/i.test(msg)) {
         this.emit(session, { type: "onboarding", state: "auth-required" });
       } else if (process.platform === "win32" && /timed out: (initialize|session\/(new|load))|exited \(code null\)/i.test(msg)) {
         // The signature of the Windows stdio regression (issue #22): a startup request
@@ -3556,12 +3563,14 @@ See design doc for the full state machine diagram.`;
         this.setStatus(session, "error");
         return;
       }
-      const message = e?.data?.message ?? e?.message ?? String(err);
       // An expired-token error wedges only THIS long-lived process (the CLI shares
       // ~/.grok/auth.json across the pool + sibling `grok login`); transparently
       // reload the process and resend before surfacing the error (see method doc).
-      if (await this.recoverAuthAndResend(session, message, text, sentChips, promptBlocks)) return;
-      this.emit(session, { type: "agentError", text: message });
+      if (await this.recoverAuthAndResend(session, e, text, sentChips, promptBlocks)) return;
+      // Recovery declined (already retried this streak, or not auth-shaped):
+      // promptErrorText keeps the copy consistent — the entitlement notice for
+      // billing-flavored wording (#58), the raw detail otherwise.
+      this.emit(session, { type: "agentError", text: promptErrorText(e) });
       this.setStatus(session, "error");
     } finally {
       // If the user approved/declined a plan mid-turn, the follow-up action was
@@ -3579,23 +3588,29 @@ See design doc for the full state machine diagram.`;
    * Recover from an expired-token turn failure without a manual sign-out. A
    * pooled `grok agent stdio` process can wedge on an expired OAuth token when
    * its 401-refresh loses a rotation race with the sibling processes / `grok
-   * login` that share `~/.grok/auth.json`; the API then rejects it (often as a
-   * misleading "you need to pay"). A FRESH process re-reads the current disk
-   * token — exactly what re-login does, minus the sign-out — so we transparently
-   * restart the focused session (`startSession` respawns + `session/load`s to
-   * preserve history) and RE-SEND the failed prompt once. Guarded by
-   * `authRecoveryTried` (reset on any clean turn) so a genuine dead-auth / real
-   * billing error can't loop: the resend's own failure surfaces normally.
-   * Returns true when it handled the error (caller must not also show it).
+   * login` that share `~/.grok/auth.json`. A FRESH process re-reads the current
+   * disk token — exactly what re-login does, minus the sign-out — so we
+   * transparently restart the focused session (`startSession` respawns +
+   * `session/load`s to preserve history) and RE-SEND the failed prompt once.
+   * Guarded by `authRecoveryTried` (reset on any clean turn) so a genuine
+   * dead-auth / entitlement error can't loop. The resend's failure is the
+   * decision point (#58): only a CREDENTIAL failure (`isCredentialError` — the
+   * CLI's -32000 auth_required, or unambiguous credential wording) earns the
+   * sign-in overlay; billing/entitlement wording that a fresh process couldn't
+   * clear is NOT fixable by login (the CLI maps 403 to a plain error precisely
+   * because the credential was accepted) and shows the in-chat entitlement
+   * notice instead. Returns true when it handled the error (caller must not
+   * also show it).
    */
   private async recoverAuthAndResend(
     session: Session,
-    errorText: string,
+    err: unknown,
     displayText: string,
     chips: FileChip[],
     promptBlocks: Parameters<AcpClient["prompt"]>[0],
   ): Promise<boolean> {
-    if (!isAuthErrorText(errorText)) return false;
+    const errorText = errorDetail(err);
+    if (!isAuthErrorText(errorText) && !isCredentialError(err)) return false;
     if (session !== this.focused) return false;   // only the active session is safe to reload here
     if (!session.activeSessionId) return false;   // need an id to session/load history back
     if (session.authRecoveryTried) return false;  // already retried this streak → let it surface
@@ -3632,13 +3647,23 @@ See design doc for the full state machine diagram.`;
         this.setStatus(session, "error");
         return true;
       }
-      const t2 = e2?.data?.message ?? e2?.message ?? String(err2);
-      if (isAuthErrorText(t2)) {
-        // A fresh process still can't auth → auth.json genuinely dead (or a real
-        // billing block) → the honest ask is a re-login.
-        this.emit(session, { type: "onboarding", state: "auth-required" });
+      if (isCredentialError(e2)) {
+        // A fresh process still can't authenticate → auth.json genuinely dead →
+        // the honest ask is a re-login. The agentError FIRST: its webview
+        // handler is what clears the busy/"Grokking" indicator and leaves a
+        // truthful transcript (the overlay alone froze both — #58). The overlay
+        // itself is post()ed, not emit()ed: live-only, so it can't resurrect
+        // from the replay buffer on a later focus switch after the user has
+        // already re-authed.
+        this.emit(session, { type: "agentError", text: errorDetail(e2) });
+        this.setStatus(session, "error");
+        this.post({ type: "onboarding", state: "auth-required" });
       } else {
-        this.emit(session, { type: "agentError", text: t2 });
+        // Entitlement/billing wording (or anything else) on a fresh process is
+        // not a sign-in problem — promptErrorText shows the entitlement notice
+        // with the CLI's own actionable advice in chat (#58), never the login
+        // overlay, which can't fix it.
+        this.emit(session, { type: "agentError", text: promptErrorText(e2) });
         this.setStatus(session, "error");
       }
     }

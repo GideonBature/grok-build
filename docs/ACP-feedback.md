@@ -682,6 +682,35 @@ client can honestly render is "usage limit reached, try again later."
 **Ask:** announce dates and limits — a reset timestamp in the rate-limit error, and quota
 used/limit (or %) both as a turn-level signal and queryable on demand, rather than a post-mortem.
 
+### 2.14 Entitlement errors are prose-only, and a cached OAuth session silently shadows `XAI_API_KEY`
+
+**Build:** 0.2.101. **Source:** `xai-grok-shell/src/sampling/error.rs:54-85`,
+`xai-grok-shell/src/session/acp_session_impl/session_setup.rs:13-33`. **User report:**
+[#58](https://github.com/phuryn/grok-build-vscode/issues/58).
+
+The CLI's error mapping is deliberate and mostly right: 401 → `-32000` auth_required (rewritten
+to one of two fixed "run `grok login`" strings), 429 → `-32003`, and 403 → **plain
+`internal_error` (-32603)** — correctly *not* auth, because the credential was accepted. But that
+last bucket mixes entitlement ("The model 'grok-build' requires a Grok subscription."),
+content-policy blocks, and genuine server faults, distinguishable only by prose. A client that
+wants "missing subscription" to render as something other than a generic failure has to regex the
+message — which is how our extension originally mis-routed it to the **sign-in screen** (#58: an
+unfixable loop, since the user's sign-in was fine). Fixed in v1.7.3 by trusting `-32000` as the
+only overlay-worthy signal and text-classifying the 403 family into an in-chat notice — but the
+text contract is unversioned and could change under us silently.
+
+Compounding it: when both a cached OAuth session and `XAI_API_KEY` exist, **auth prefers the
+cached session** (`sampling/error.rs:29-34`), so a user whose OAuth account lacks the entitlement
+cannot escape by supplying a valid key — their key is silently ignored. The only wire-visible
+trace is a hint string appended to one 403 variant ("Your cached OAuth session is being used
+instead… run `grok logout`"). The active auth method is otherwise unknowable to an ACP client.
+
+**Ask:** a structured discriminator on 403-family errors (e.g. `data.code:
+"subscription:entitlement-required"`, mirroring the existing `subscription:free-usage-exhausted`
+well-known code), and the active auth method (oauth vs api-key) surfaced somewhere queryable —
+`initialize`'s response or the `_x.ai/session/info` family — so a client can warn about the
+shadowing instead of parsing a hint out of an error message.
+
 ---
 
 ## 3. What the extension silently hides from users today
