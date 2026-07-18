@@ -14,6 +14,11 @@ import {
   isIncompatibleAgentError,
   isMethodNotFoundError,
   isAuthErrorText,
+  isRateLimitError,
+  isRateLimitErrorText,
+  promptErrorText,
+  rateLimitNoticeText,
+  RATE_LIMITED_ERROR_CODE,
   usageIsRealMeasurement,
   makeAckResponse,
   makeExitPlanResponse,
@@ -489,6 +494,80 @@ describe("isAuthErrorText (expired-token auto-recovery gate)", () => {
     expect(isAuthErrorText("")).toBe(false);
     expect(isAuthErrorText(null)).toBe(false);
     expect(isAuthErrorText(undefined)).toBe(false);
+  });
+});
+
+describe("rate-limit classification (#57 — a usage limit is not an auth problem)", () => {
+  // The CLI's own copy strings (OSS sampling/error.rs + pager billing.rs).
+  const OAUTH_COPY = "You\u{2019}ve hit the rate limit for your plan. Upgrade your account or try again later.";
+  const API_KEY_COPY = "You\u{2019}ve hit your team\u{2019}s API rate limit. Ask a team admin to purchase more credits for higher limits, or try again later.";
+  const WEEKLY_COPY = "You hit your weekly limit.";
+  const FREE_USAGE_COPY = "You\u{2019}ve reached your free Grok Build usage limit for now. Get SuperGrok for much higher limits, or try again later.";
+
+  it("isRateLimitErrorText matches the CLI's known limit phrasings", () => {
+    expect(isRateLimitErrorText("Rate limited")).toBe(true);
+    expect(isRateLimitErrorText(OAUTH_COPY)).toBe(true);
+    expect(isRateLimitErrorText(API_KEY_COPY)).toBe(true);
+    expect(isRateLimitErrorText(WEEKLY_COPY)).toBe(true);
+    expect(isRateLimitErrorText(FREE_USAGE_COPY)).toBe(true);
+    expect(isRateLimitErrorText("subscription:free-usage-exhausted: no free usage left")).toBe(true);
+    expect(isRateLimitErrorText("You\u{2019}ve hit your spending cap.")).toBe(true);
+    expect(isRateLimitErrorText("HTTP 429 Too Many Requests")).toBe(true);
+  });
+
+  it("isRateLimitErrorText does NOT match auth faults or a context-window overflow", () => {
+    expect(isRateLimitErrorText("access token expired")).toBe(false);
+    expect(isRateLimitErrorText("401 Unauthorized")).toBe(false);
+    expect(isRateLimitErrorText("prompt exceeds the model's context limit")).toBe(false);
+    expect(isRateLimitErrorText("network timeout")).toBe(false);
+    expect(isRateLimitErrorText("")).toBe(false);
+    expect(isRateLimitErrorText(null)).toBe(false);
+  });
+
+  it("isRateLimitError: the structured -32003 code wins regardless of wording", () => {
+    expect(isRateLimitError({ code: RATE_LIMITED_ERROR_CODE, message: "Rate limited", data: "anything at all" })).toBe(true);
+    expect(isRateLimitError({ code: -32603, message: "Internal error", data: "boom" })).toBe(false);
+    expect(isRateLimitError(new Error("plain failure"))).toBe(false);
+  });
+
+  it("isRateLimitError: text fallback covers flattened surfaces and {message} data", () => {
+    expect(isRateLimitError(new Error(WEEKLY_COPY))).toBe(true);
+    expect(isRateLimitError({ code: -32603, data: { message: "subscription:free-usage-exhausted: out of free usage" } })).toBe(true);
+    expect(isRateLimitError({ code: -32603, data: FREE_USAGE_COPY })).toBe(true);
+  });
+
+  it("rateLimitNoticeText: leads with the not-a-sign-in clarification, keeps the wire detail", () => {
+    const notice = rateLimitNoticeText({ code: RATE_LIMITED_ERROR_CODE, message: "Rate limited", data: WEEKLY_COPY });
+    expect(notice).toMatch(/not a sign-in issue/i);
+    expect(notice).toContain(WEEKLY_COPY);
+  });
+
+  it("rateLimitNoticeText: strips the well-known code token, falls back to generic copy", () => {
+    const stripped = rateLimitNoticeText({
+      code: RATE_LIMITED_ERROR_CODE,
+      message: "Rate limited",
+      data: { message: "subscription:free-usage-exhausted: No free usage left." },
+    });
+    expect(stripped).not.toContain("free-usage-exhausted");
+    expect(stripped).toContain("No free usage left.");
+    // A bare "Rate limited" carries no information — use the CLI's generic copy.
+    const generic = rateLimitNoticeText({ code: RATE_LIMITED_ERROR_CODE, message: "Rate limited" });
+    expect(generic).toContain("rate limit for your plan");
+  });
+
+  it("isAuthErrorText yields to the limit classifier (the #57 login-redirect trap)", () => {
+    // Limit errors carry billing-flavored wording the broad auth fallback used
+    // to catch, sending the user to the login screen — which can't fix a limit.
+    expect(isAuthErrorText("subscription:free-usage-exhausted: You\u{2019}ve reached your free usage limit")).toBe(false);
+    expect(isAuthErrorText(FREE_USAGE_COPY)).toBe(false);
+    // Real entitlement phrasing without limit words still routes to auth recovery.
+    expect(isAuthErrorText("Your subscription is required")).toBe(true);
+  });
+
+  it("promptErrorText: friendly notice for limits, the error's own message otherwise", () => {
+    expect(promptErrorText({ code: RATE_LIMITED_ERROR_CODE, message: "Rate limited", data: WEEKLY_COPY })).toMatch(/Usage limit reached/);
+    expect(promptErrorText({ code: -32603, message: "Internal error", data: { message: "boom" } })).toBe("boom");
+    expect(promptErrorText(new Error("plain failure"))).toBe("plain failure");
   });
 });
 

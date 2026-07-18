@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.2 — 2026-07-18
+
+### Fixed
+
+- **Hitting your usage/weekly limit no longer looks like a sign-in problem.** A rate-limited turn (ACP error `-32003`, or the CLI's limit phrasings) now shows a clear "Usage limit reached — not a sign-in issue" notice carrying the CLI's own message. Before, the limit's billing-flavored wording tripped the expired-token recovery, whose retry ended on the login screen. No reset date is shown because the CLI/backend never provides one. ([#57](https://github.com/phuryn/grok-build-vscode/issues/57); [src/acp-dispatch.ts](src/acp-dispatch.ts), [src/sidebar.ts](src/sidebar.ts))
+
 ## 1.7.1 — 2026-07-18
 
 ### Changed

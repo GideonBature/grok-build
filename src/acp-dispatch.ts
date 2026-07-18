@@ -563,12 +563,88 @@ export function isIncompatibleAgentError(err: any): boolean {
  * the wedged process (a fresh one re-reads the current disk token) instead of
  * making the user sign out and back in. Kept deliberately broad — a false match
  * costs one guarded reload, then the real error surfaces on the retry.
+ * A rate/usage-limit message yields to `isRateLimitErrorText` first (#57): a
+ * weekly-limit error carries the same billing-flavored wording, but routing it
+ * here ends on the login screen, which can't fix a limit.
  */
 export function isAuthErrorText(msg: unknown): boolean {
   const s = String(msg ?? "");
+  if (isRateLimitErrorText(s)) return false;
   if (/\b(401|403)\b|unauthor|forbidden|\bcredential|\bapi[_\s-]?key\b|not (?:signed|logged) ?in|(?:sign|log) ?in again|re-?login|authenticat\w*\s*(?:failed|required|error|expired)|token (?:has )?expired|expired\s+token|session (?:has )?expired/i.test(s)) return true;
   // An expired token frequently masquerades as a billing/entitlement message.
   return /\bpay(?:ment)?\b|\bbilling\b|\bsubscription\b|\bentitl\w+|\bunpaid\b|\bcredits?\s+(?:exhaust|remain|requir)/i.test(s);
+}
+
+/**
+ * ACP error code the CLI uses for HTTP 429 rate-limit failures. Its documented
+ * contract (OSS `sampling/error.rs`): clients suppress the error detail and
+ * show a friendly limit message instead of a generic failure.
+ */
+export const RATE_LIMITED_ERROR_CODE = -32003;
+
+/** The CLI's own OAuth-plan rate-limit copy, reused verbatim when a -32003
+ *  arrives with no usable detail. */
+const GENERIC_RATE_LIMIT_TEXT =
+  "You\u{2019}ve hit the rate limit for your plan. Upgrade your account or try again later.";
+
+/** The human detail a grok ACP error carries: `data` is either the bare detail
+ *  string or a `{message}` object (the CLI's attach_prompt_usage wrapper). */
+function errorDetail(err: any): string {
+  const d = err?.data;
+  if (typeof d === "string") return d;
+  if (typeof d?.message === "string") return d.message;
+  return typeof err?.message === "string" ? err.message : String(err ?? "");
+}
+
+/**
+ * True when a message reads as a rate/usage-limit rather than a real fault.
+ * Phrasings mirror the CLI's own copy (OSS `sampling/error.rs` + pager
+ * `billing.rs`): "rate limit" (OAuth/API-key/plain "Rate limited"), the
+ * weekly/usage-limit and spending-cap upsells, the well-known
+ * `subscription:free-usage-exhausted` code, and raw HTTP-429 phrasing.
+ * Deliberately NOT a bare "limit reached/exceeded" — a context-window overflow
+ * must not read as a usage limit.
+ */
+export function isRateLimitErrorText(msg: unknown): boolean {
+  const s = String(msg ?? "");
+  return /rate.?limit|too many requests|\b429\b|(?:usage|weekly|monthly|daily)\s+limit|spending\s+(?:cap|limit)|free.usage.exhausted/i.test(s);
+}
+
+/**
+ * True when a turn failure is a rate/usage-limit: the structured -32003 code
+ * wins regardless of wording; the text classifier is the fallback for
+ * surfaces that flatten the error to a string (retry-exhaustion notes).
+ */
+export function isRateLimitError(err: unknown): boolean {
+  const e = err as any;
+  if (e?.code === RATE_LIMITED_ERROR_CODE) return true;
+  return isRateLimitErrorText(errorDetail(e));
+}
+
+/**
+ * User-facing notice for a rate-limited turn (#57). Leads with the
+ * not-a-sign-in clarification (the reported confusion was exactly "limit
+ * reached → login screen"), then the wire detail when it says anything (the
+ * bare "Rate limited" doesn't), else the CLI's own generic copy. No reset date
+ * is shown because none exists on the wire — the quota window is
+ * backend-config-driven and the CLI deliberately promises no duration.
+ */
+export function rateLimitNoticeText(err: unknown): string {
+  const raw = errorDetail(err)
+    .replace(/^subscription:free-usage-exhausted:?\s*/i, "")
+    .trim();
+  const body = raw && !/^rate ?limited\.?$/i.test(raw) ? raw : GENERIC_RATE_LIMIT_TEXT;
+  return `Usage limit reached \u{2014} not a sign-in issue. ${body}`;
+}
+
+/**
+ * The text a failed prompt turn surfaces in chat: the friendly limit notice
+ * for a rate-limited error, else the error's own message.
+ */
+export function promptErrorText(err: unknown): string {
+  if (isRateLimitError(err)) return rateLimitNoticeText(err);
+  const e = err as any;
+  return e?.data?.message ?? e?.message ?? String(err);
 }
 
 /**

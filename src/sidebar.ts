@@ -11,7 +11,7 @@ import { resolveVoiceKey, extractGrokAuthKey, parseVoiceCommand, DEFAULT_SEND_PH
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
 import type { PromptResultMeta } from "./acp-dispatch";
-import { MediaRef, addUsage, autoCompactStartedNote, contextUsedFromCompactNotification, gateZeroTokenMeta, isAuthErrorText, isIncompatibleAgentError, isSubagentLifecycleUpdate, parseSessionInfoContext, permissionOutcomeFor, summarizeBackgroundCommand, usageIsRealMeasurement } from "./acp-dispatch";
+import { MediaRef, addUsage, autoCompactStartedNote, contextUsedFromCompactNotification, gateZeroTokenMeta, isAuthErrorText, isIncompatibleAgentError, isRateLimitError, isSubagentLifecycleUpdate, parseSessionInfoContext, permissionOutcomeFor, promptErrorText, rateLimitNoticeText, summarizeBackgroundCommand, usageIsRealMeasurement } from "./acp-dispatch";
 import { modeToRemember, startsInYolo } from "./mode-prefs";
 import { GROK_VIEW_ID, moveViewContainerFor } from "./view-move";
 import {
@@ -651,8 +651,7 @@ See design doc for the full state machine diagram.`;
           this.setStatus(session, "done");
         } catch (err) {
           if (gen !== session.gen) return;
-          const e = err as any;
-          this.emit(session, { type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+          this.emit(session, { type: "agentError", text: promptErrorText(err) });
           this.setStatus(session, "error");
         }
       };
@@ -705,8 +704,7 @@ See design doc for the full state machine diagram.`;
           this.setStatus(session, "done");
         } catch (err) {
           if (gen !== session.gen) return;
-          const e = err as any;
-          this.emit(session, { type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+          this.emit(session, { type: "agentError", text: promptErrorText(err) });
           this.setStatus(session, "error");
         }
       };
@@ -756,8 +754,7 @@ See design doc for the full state machine diagram.`;
         this.setStatus(session, "done");
       } catch (err) {
         if (gen !== session.gen) return;
-        const e = err as any;
-        this.emit(session, { type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+        this.emit(session, { type: "agentError", text: promptErrorText(err) });
         this.setStatus(session, "error");
       }
     };
@@ -3524,6 +3521,15 @@ See design doc for the full state machine diagram.`;
     } catch (err) {
       if (gen !== session.gen) return; // prompt rejected because we disposed the old client — don't leak the error into the new session
       const e = err as any;
+      // A rate/usage-limit failure (ACP -32003, or limit phrasing) is not a
+      // credential problem: skip the auth recovery — its retry would end on
+      // the login screen, which can't fix a limit — and show a clear limit
+      // notice instead (#57).
+      if (isRateLimitError(e)) {
+        this.emit(session, { type: "agentError", text: rateLimitNoticeText(e) });
+        this.setStatus(session, "error");
+        return;
+      }
       const message = e?.data?.message ?? e?.message ?? String(err);
       // An expired-token error wedges only THIS long-lived process (the CLI shares
       // ~/.grok/auth.json across the pool + sibling `grok login`); transparently
@@ -3593,6 +3599,13 @@ See design doc for the full state machine diagram.`;
     } catch (err2) {
       if (gen !== session.gen) return true;
       const e2 = err2 as any;
+      // The resend ran into a usage limit — that's the real story, not auth
+      // (#57): a fresh process with a fresh token hit the same wall.
+      if (isRateLimitError(e2)) {
+        this.emit(session, { type: "agentError", text: rateLimitNoticeText(e2) });
+        this.setStatus(session, "error");
+        return true;
+      }
       const t2 = e2?.data?.message ?? e2?.message ?? String(err2);
       if (isAuthErrorText(t2)) {
         // A fresh process still can't auth → auth.json genuinely dead (or a real
