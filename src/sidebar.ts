@@ -60,6 +60,9 @@ import { appendPlanEntry, countsAsUserBubble, decideRestoreState } from "./plan-
 import { planReviewFileBaseName, sanitizePlanReviewFilePart } from "./plan-review";
 import { GROK_PRIMER, isPrimerText, isPrimerSummary } from "./grok-primer";
 import { HostMsg, WebviewMsg } from "./protocol";
+import { RemoteUplink } from "./remote-uplink";
+import { allowFromRemote, transformHostMsgForRemote, type MediaInlineDeps, type RemoteTier } from "./remote-policy";
+import { httpBaseFromRelayUrl } from "./remote-frames";
 import {
   SessionListEntry,
   SessionMetaOverrides,
@@ -196,6 +199,20 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
   // message = one clean utterance) without re-resolving the mic device.
   private voiceStreamCtx?: { key: string; ffmpegPath: string; device?: string; phrase: string; keyterms: string[] };
   private configWatcher?: vscode.Disposable;
+  // Remote uplink — outbound wss to a relay, active only when
+  // grok.remoteControl.relayUrl is set AND a device token is stored (the
+  // "Grok: Link Remote Device" flow). The taps in post()/emit() are no-ops when
+  // it's off, so the shipping path is unaffected.
+  private uplink?: RemoteUplink;
+  // Last-seen "chrome" messages (labels, donut, lists, config echoes) that live
+  // OUTSIDE Session.buffer — the buffer replays the chat, this replays the shell.
+  // A new remote client's snapshot = these + clearMessages + the focused buffer.
+  private stickyChrome = new Map<HostMsg["type"], HostMsg>();
+  private static readonly STICKY_CHROME_TYPES = new Set<HostMsg["type"]>([
+    "initialState", "session", "modelChanged", "modeChanged", "chips",
+    "contextUsage", "sessions", "queuedSends", "onboarding", "commandsUpdate",
+    "grokUpdateStatus", "voiceConfigured", "fontScale", "showThinking", "expandCommandOutputs",
+  ]);
   private cliPath?: string;
   // Guards the silent grok-CLI auto-update so it runs at most once per activation.
   private cliUpdateChecked = false;
@@ -302,8 +319,15 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       if (e.affectsConfiguration("grok.terminalShell")) {
         this.applyTerminalShellPref();
       }
+      if (e.affectsConfiguration("grok.remoteControl")) {
+        // relayUrl can change, so tear down and re-create rather than no-op.
+        this.uplink?.dispose();
+        this.uplink = undefined;
+        void this.maybeStartUplink();
+      }
     });
     this.applyTerminalShellPref();
+    void this.maybeStartUplink();
   }
 
   /** Push the `grok.terminalShell` preference (#46) into the shared shell
@@ -1121,6 +1145,8 @@ See design doc for the full state machine diagram.`;
 
   dispose(): void {
     if (this.reaper) { clearInterval(this.reaper); this.reaper = undefined; }
+    this.uplink?.dispose();
+    this.uplink = undefined;
     void this.disposePool();
     this.editorWatcher?.dispose();
     this.configWatcher?.dispose();
@@ -3637,10 +3663,10 @@ See design doc for the full state machine diagram.`;
     void this.context.globalState.update(SESSION_META_KEY, next);
   }
 
-  private postInitialState(): void {
+  private buildInitialStateMsg(): HostMsg {
     const cfg = vscode.workspace.getConfiguration("grok");
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-    this.post({
+    return {
       type: "initialState",
       effort: cfg.get("defaultEffort", ""),
       cwd,
@@ -3649,7 +3675,11 @@ See design doc for the full state machine diagram.`;
       showThinking: cfg.get("showThinking", false),
       expandCommandOutputs: cfg.get("expandCommandOutputs", false),
       steerByDefault: cfg.get("steerByDefault", false),
-    });
+    };
+  }
+
+  private postInitialState(): void {
+    this.post(this.buildInitialStateMsg());
     // Sync the active-editor context chip into the fresh webview (the config
     // gate + no-editor case live inside refreshImplicitChip).
     this.refreshImplicitChip(true);
@@ -3685,6 +3715,7 @@ See design doc for the full state machine diagram.`;
     if (this.focused.suppressContent && GrokSidebar.SUPPRESS_TYPES.has(message.type)) return;
     if (this.focused.suppressPlanReject && GrokSidebar.PLAN_REJECT_SUPPRESS.has(message.type)) return;
     this.view?.webview.postMessage(message);
+    this.mirrorToRemote(message);
   }
 
   /**
@@ -3703,7 +3734,23 @@ See design doc for the full state machine diagram.`;
     if (session.suppressPlanReject && GrokSidebar.PLAN_REJECT_SUPPRESS.has(message.type)) return;
     if (message.type === "clearMessages") session.buffer = [];
     else session.buffer.push(message);
-    if (session === this.focused) this.view?.webview.postMessage(message);
+    if (session === this.focused) {
+      this.view?.webview.postMessage(message);
+      this.mirrorToRemote(message);
+    }
+  }
+
+  /** Record sticky chrome + fan the (already-un-suppressed, focused) message out
+   *  to remote clients. No-op unless the uplink is running. Shared focus:
+   *  remote mirrors exactly what the local webview sees. Outbound policy applies
+   *  here: host-local messages (voice) + video are suppressed, image `media` is
+   *  base64-inlined (an asWebviewUri src only resolves inside the local webview). */
+  private mirrorToRemote(message: HostMsg): void {
+    if (GrokSidebar.STICKY_CHROME_TYPES.has(message.type)) this.stickyChrome.set(message.type, message);
+    if (!this.uplink) return;
+    const out = transformHostMsgForRemote(message, GrokSidebar.REMOTE_MEDIA_DEPS);
+    if (!out) return;
+    this.uplink.broadcast(out);
   }
 
   // ---------- session pool ----------
@@ -4188,6 +4235,145 @@ See design doc for the full state machine diagram.`;
       this.output.appendLine(`[env] loaded ${Object.keys(dotEnv).length} var(s) from .env`);
     }
     return env;
+  }
+
+  // ---------- remote control (thin client — the relay + web app live in the
+  // separate grok-remote repo; design doc lives there too) ----------
+
+  /** v1 ships one capability tier — every paired remote is fully trusted
+   *  (decision 2026-07-16). The policy module supports read-only/propose for a
+   *  later per-device setting. */
+  private static readonly REMOTE_TIER: RemoteTier = "full";
+
+  /** Impure half of the media inline transform (the decision logic is the pure
+   *  remote-policy). Sync read keeps broadcast ordering; media is rare + capped. */
+  private static readonly REMOTE_MEDIA_DEPS: MediaInlineDeps = {
+    readFile: (p) => {
+      try {
+        return fs.readFileSync(p);
+      } catch {
+        return null;
+      }
+    },
+    toBase64: (bytes) => Buffer.from(bytes).toString("base64"),
+  };
+
+  /** The single inbound choke point for remote clients: capability-gate, then
+   *  route into the normal onMessage switch. */
+  private handleRemoteMessage(m: WebviewMsg): void {
+    if (!allowFromRemote(m.type, GrokSidebar.REMOTE_TIER)) {
+      this.output.appendLine(`[remote] dropped ${m.type} (not allowed from a remote client)`);
+      return;
+    }
+    void this.onMessage(m).catch((e) =>
+      this.output.appendLine(`[remote] ${m.type} failed: ${(e as Error)?.message ?? String(e)}`),
+    );
+  }
+
+  private static readonly DEVICE_TOKEN_SECRET = "grok.remoteControl.deviceToken";
+
+  /** Start the relay uplink when grok.remoteControl.relayUrl is set and a device
+   *  token is stored (from the link flow). Idempotent; disposed by the config
+   *  watcher on any remoteControl.* change. */
+  private async maybeStartUplink(): Promise<void> {
+    const relayUrl = vscode.workspace.getConfiguration("grok").get<string>("remoteControl.relayUrl", "").trim();
+    if (!relayUrl || this.uplink) return;
+    const token = await this.context.secrets.get(GrokSidebar.DEVICE_TOKEN_SECRET);
+    if (!token) return; // not linked yet — the link command starts the uplink itself
+    this.uplink = new RemoteUplink({
+      relayUrl,
+      token,
+      deviceName: `${os.hostname()} — ${path.basename(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "no workspace")}`,
+      snapshot: () => this.buildRemoteSnapshot(),
+      onClientMessage: (m) => this.handleRemoteMessage(m),
+      log: (l) => this.output.appendLine(l),
+    });
+    this.uplink.start();
+  }
+
+  /** "Grok: Link Remote Device" — the device-code flow against the relay's REST
+   *  edge: start a link, open the browser for the (mock for now) approval, poll
+   *  until the relay hands back a long-lived device token, store it in secrets,
+   *  connect. Mirrors how a CLI links to a web account. */
+  async linkRemoteDevice(): Promise<void> {
+    const relayUrl = vscode.workspace.getConfiguration("grok").get<string>("remoteControl.relayUrl", "").trim();
+    if (!relayUrl) {
+      void vscode.window.showErrorMessage("Set grok.remoteControl.relayUrl first (e.g. ws://localhost:8787).");
+      return;
+    }
+    const base = httpBaseFromRelayUrl(relayUrl);
+    try {
+      const name = `${os.hostname()} — ${path.basename(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "no workspace")}`;
+      const startRes = await fetch(`${base}/api/link/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!startRes.ok) throw new Error(`link/start ${startRes.status}`);
+      const { code } = (await startRes.json()) as { code: string };
+      void vscode.env.openExternal(vscode.Uri.parse(`${base}/link?code=${encodeURIComponent(code)}`));
+      const token = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Approve this device in the browser (code ${code})…`, cancellable: true },
+        (_p, cancel) => this.pollLinkApproval(base, code, cancel),
+      );
+      if (!token) return; // cancelled / expired — poll loop already surfaced why
+      await this.context.secrets.store(GrokSidebar.DEVICE_TOKEN_SECRET, token);
+      this.uplink?.dispose();
+      this.uplink = undefined;
+      await this.maybeStartUplink();
+      void vscode.window.showInformationMessage("Remote device linked — this workspace is now reachable from the web client.");
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Remote link failed: ${(e as Error)?.message ?? String(e)}`);
+    }
+  }
+
+  private async pollLinkApproval(base: string, code: string, cancel: vscode.CancellationToken): Promise<string | undefined> {
+    const deadline = Date.now() + 5 * 60_000;
+    while (Date.now() < deadline && !cancel.isCancellationRequested) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const res = await fetch(`${base}/api/link/poll`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { status: string; token?: string };
+      if (body.status === "approved" && body.token) return body.token;
+      if (body.status === "expired" || body.status === "unknown") {
+        void vscode.window.showErrorMessage("Remote link code expired — run the link command again.");
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+
+  /** "Grok: Unlink Remote Device" — drop the token + connection. */
+  async unlinkRemoteDevice(): Promise<void> {
+    await this.context.secrets.delete(GrokSidebar.DEVICE_TOKEN_SECRET);
+    this.uplink?.dispose();
+    this.uplink = undefined;
+    void vscode.window.showInformationMessage("Remote device unlinked.");
+  }
+
+  /** Ordered catch-up for a newly-`ready` client: initialState first (so chat.js
+   *  initializes), then clearMessages + the focused chat buffer, then the rest of
+   *  the sticky chrome (labels/donut/lists — order among them is moot). All of it
+   *  through the outbound policy (media inlined, host-local suppressed). */
+  private buildRemoteSnapshot(): HostMsg[] {
+    const snap: HostMsg[] = [];
+    snap.push(this.stickyChrome.get("initialState") ?? this.buildInitialStateMsg());
+    snap.push({ type: "clearMessages" });
+    for (const m of this.focused.buffer) snap.push(m);
+    for (const [type, m] of this.stickyChrome) {
+      if (type === "initialState") continue;
+      snap.push(m);
+    }
+    const out: HostMsg[] = [];
+    for (const m of snap) {
+      const t = transformHostMsgForRemote(m, GrokSidebar.REMOTE_MEDIA_DEPS);
+      if (t) out.push(t);
+    }
+    return out;
   }
 
   private getHtml(webview: vscode.Webview): string {

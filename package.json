@@ -124,6 +124,14 @@
         "title": "Grok: Log Out"
       },
       {
+        "command": "grok.linkRemote",
+        "title": "Grok: Link Remote Device"
+      },
+      {
+        "command": "grok.unlinkRemote",
+        "title": "Grok: Unlink Remote Device"
+      },
+      {
         "command": "grok._debugDummyPlan",
         "title": "Grok: Debug — Show dummy plan card (for testing Approve/Reject/Cancel)"
       }
@@ -229,6 +237,11 @@
           "type": "boolean",
           "default": false,
           "description": "Use Ctrl/Cmd+Enter to send (Enter inserts newline)."
+        },
+        "grok.remoteControl.relayUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "**Experimental.** ws(s):// URL of a Grok remote relay. When set, run **Grok: Link Remote Device** to pair this machine; the extension then dials OUT to the relay (no inbound port) so the paired web client can drive this workspace. Empty = off."
         },
         "grok.terminalShell": {
           "type": "string",
