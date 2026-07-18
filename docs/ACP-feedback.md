@@ -674,9 +674,13 @@ client can honestly render is "usage limit reached, try again later."
    existing `_meta.usage` / `turn_completed.usage` rails or a `session_notification`. Today the
    first sign of the limit is the hard stop; with a usage figure a client can show "82% of your
    weekly limit" and warn *before* the wall, which is when the information is actually useful.
+3. **The same quota state on request** — an RPC (a natural neighbor of the unadvertised
+   `_x.ai/session/info` family) so a client can render it whenever it wants: a status bar, the
+   context popover, or at session start before any turn has run. A push-only signal leaves the
+   figure unknowable until a turn happens to complete.
 
 **Ask:** announce dates and limits — a reset timestamp in the rate-limit error, and quota
-used/limit (or %) as a turn-level signal rather than a post-mortem.
+used/limit (or %) both as a turn-level signal and queryable on demand, rather than a post-mortem.
 
 ---
 
