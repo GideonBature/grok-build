@@ -1,6 +1,5 @@
-// Remote-control policy (Phase 1) — the message-classification table from the
-// remote-control design doc (grok-remote repo, docs/remote-control-design.md §
-// Message classification), as code.
+// Remote-control policy (Phase 1) — the per-message classification table for
+// remote clients, as code.
 //
 // Pure: no vscode/fs/network imports. The exhaustive Record maps mirror the
 // protocol.ts pattern — adding a message type to HostMsg/WebviewMsg without

@@ -4237,8 +4237,8 @@ See design doc for the full state machine diagram.`;
     return env;
   }
 
-  // ---------- remote control (thin client — the relay + web app live in the
-  // separate grok-remote repo; design doc lives there too) ----------
+  // ---------- remote control (thin client only — the relay server and web
+  // client are a separate project) ----------
 
   /** v1 ships one capability tier — every paired remote is fully trusted
    *  (decision 2026-07-16). The policy module supports read-only/propose for a
