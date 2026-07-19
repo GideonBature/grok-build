@@ -11,8 +11,41 @@ import {
   makeImplicitChip,
   mimeFromPath,
   removeChip,
+  selectionLineRange,
   toggleChip,
 } from "../src/chips";
+
+// VS Code positions are 0-based; the chip range is 1-based inclusive. Selection
+// ends are exclusive: selecting whole lines parks `end` at character 0 of the
+// NEXT line, which must not count as a selected line.
+describe("selectionLineRange", () => {
+  it("drops the phantom line of a full-line selection (end at col 0)", () => {
+    // Lines 6-8 (1-based) selected via click-drag over whole lines: start {5,0},
+    // end {8,0}. The old unconditional `end.line + 1` attached line 9 too.
+    expect(selectionLineRange({ line: 5, character: 0 }, { line: 8, character: 0 }))
+      .toEqual({ startLine: 6, endLine: 8 });
+  });
+
+  it("keeps the end line when the selection ends mid-line", () => {
+    expect(selectionLineRange({ line: 5, character: 2 }, { line: 8, character: 10 }))
+      .toEqual({ startLine: 6, endLine: 9 });
+  });
+
+  it("handles a single full line (end at col 0 of the next line)", () => {
+    expect(selectionLineRange({ line: 3, character: 0 }, { line: 4, character: 0 }))
+      .toEqual({ startLine: 4, endLine: 4 });
+  });
+
+  it("handles a selection within one line (end col 0 never happens below start)", () => {
+    expect(selectionLineRange({ line: 3, character: 4 }, { line: 3, character: 9 }))
+      .toEqual({ startLine: 4, endLine: 4 });
+  });
+
+  it("a partial first line ending at col 0 of a later line still excludes that line", () => {
+    expect(selectionLineRange({ line: 3, character: 7 }, { line: 4, character: 0 }))
+      .toEqual({ startLine: 4, endLine: 4 });
+  });
+});
 
 describe("chips", () => {
   it("creates an implicit chip with a stable id", () => {

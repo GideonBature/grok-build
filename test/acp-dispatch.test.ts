@@ -715,6 +715,32 @@ describe("extractImageContent (ACP-standard block fallback)", () => {
       .toEqual({ media: "image", kind: "uri", uri: "https://x.ai/a.jpg", mimeType: undefined });
   });
 
+  // Windows CLI URIs: URL#pathname alone yields `/C:/…` (a leading slash fs
+  // can't open) and drops the host of a UNC URI — refFromUri must produce an
+  // openable path for both.
+  it("maps a Windows drive-letter file:// resource_link to an openable path", () => {
+    expect(extractImageContent({
+      type: "resource_link",
+      uri: "file:///C:/Users/p/.grok/sessions/s/images/out.png",
+    })).toEqual({
+      media: "image", kind: "path", path: "C:/Users/p/.grok/sessions/s/images/out.png", mimeType: undefined,
+    });
+  });
+
+  it("decodes percent-escaped spaces in a Windows file:// resource_link", () => {
+    expect(extractImageContent({
+      type: "resource_link",
+      uri: "file:///C:/My%20Media/out.png",
+    })).toEqual({ media: "image", kind: "path", path: "C:/My Media/out.png", mimeType: undefined });
+  });
+
+  it("keeps the UNC host of a file://server share URI", () => {
+    expect(extractImageContent({
+      type: "resource_link",
+      uri: "file://nas/media/out.png",
+    })).toEqual({ media: "image", kind: "path", path: "\\\\nas\\media\\out.png", mimeType: undefined });
+  });
+
   it("ignores text and non-image content", () => {
     expect(extractImageContent({ type: "text", text: "hi" })).toBeNull();
     expect(extractImageContent({ type: "resource_link", uri: "file:///x/notes.md" })).toBeNull();

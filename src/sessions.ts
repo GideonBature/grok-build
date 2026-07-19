@@ -1,4 +1,5 @@
 import * as nodeFs from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import { isPrimerText, isPrimerSummary } from "./grok-primer";
 import type { PromptUsage } from "./acp-dispatch";
@@ -453,8 +454,26 @@ export const defaultFs: FsLike = {
   rmdirSync: (p, opts) => nodeFs.rmdirSync(p, opts as any),
 };
 
-/** Resolve the grok home directory honoring HOME/USERPROFILE (matching cli-locator semantics). */
-export function resolveGrokHome(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.HOME || env.USERPROFILE || "";
-  return path.join(home, ".grok");
+/** Resolve the grok home directory the way the CLI does: `$GROK_HOME` override
+ *  first, else `<home>/.grok` where home is USERPROFILE on Windows and HOME
+ *  elsewhere (the CLI's Rust `std::env::home_dir()` ignores HOME on Windows) —
+ *  now genuinely matching cli-locator's `effectiveHome()`. The old
+ *  `HOME || USERPROFILE` read the wrong `.grok` on Windows boxes with HOME set
+ *  (git-bash), splitting session history from where the CLI writes it. */
+export function resolveGrokHome(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (env.GROK_HOME) return env.GROK_HOME;
+  const fromEnv = platform === "win32" ? env.USERPROFILE : env.HOME;
+  return path.join(fromEnv || homedir(), ".grok");
+}
+
+/** True when `p` resolves strictly inside directory `root` (never `root`
+ *  itself). A path-segment boundary check, not a string-prefix one: `root/..foo`
+ *  is inside (a legal dir name that merely starts with dots), `root/../x` and
+ *  `root` are not, and a different-root path (other drive) is not. */
+export function isPathInside(root: string, p: string): boolean {
+  const rel = path.relative(path.resolve(root), path.resolve(p));
+  return !!rel && rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel);
 }

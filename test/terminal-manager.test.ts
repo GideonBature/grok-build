@@ -324,3 +324,66 @@ describe("grokShellEnvValue (GROK_SHELL derived from the shell we run)", () => {
     expect(grokShellEnvValue("C:\\weird\\thing.exe", "win32")).toBeUndefined();
   });
 });
+
+// #6 regression: a taskkill that RUNS BUT FAILS (Access Denied, protected child)
+// used to be fire-and-forget — the tree stayed alive and the agent's
+// wait_for_exit pended forever. The manager must fall back to a direct signal.
+// Deps-injected so the Windows plan runs deterministically on every platform.
+describe("TerminalManager kill fallback (Windows taskkill failure)", () => {
+  it("falls back to SIGTERM when taskkill errors, so waitForExit still settles", async () => {
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const failingExec = ((file: string, args: string[], cb: (err: Error | null) => void) => {
+      calls.push({ file, args });
+      // Simulate taskkill running and failing (e.g. Access Denied) — async like
+      // the real execFile callback.
+      setImmediate(() => cb(new Error("ERROR: The process could not be terminated. Access is denied.")));
+    }) as unknown as typeof import("node:child_process").execFile;
+
+    const m = new TerminalManager({ execFileImpl: failingExec, platform: "win32" });
+    // A process that outlives the test unless something actually kills it (but
+    // self-expires in 8s so a regression can't leak it past the suite).
+    const { terminalId } = m.create({ command: nodeEval("setTimeout(()=>{}, 8000)") });
+    // Give the shell a beat to actually start the child.
+    await new Promise((r) => setTimeout(r, 300));
+
+    m.kill(terminalId);
+    const { exitCode } = await m.waitForExit(terminalId);
+
+    // The taskkill plan ran (and failed)…
+    expect(calls.length).toBe(1);
+    expect(calls[0].file).toBe("taskkill");
+    expect(calls[0].args).toContain("/T");
+    // …and the SIGTERM fallback still brought the wrapper down: a signal kill
+    // resolves as 128+signum via resolveExitCode (143), or the platform's
+    // plain non-zero termination code — never a hang, never a clean 0.
+    expect(exitCode).not.toBe(0);
+    m.release(terminalId);
+  }, 15000);
+
+  it("does not signal when taskkill fails but the process already exited", async () => {
+    let exec: ((err: Error | null) => void) | undefined;
+    const capturedExec = ((_f: string, _a: string[], cb: (err: Error | null) => void) => {
+      exec = cb; // hold the callback so we control when taskkill "fails"
+    }) as unknown as typeof import("node:child_process").execFile;
+
+    const m = new TerminalManager({ execFileImpl: capturedExec, platform: "win32" });
+    const { terminalId } = m.create({ command: nodeEval("process.exit(0)") });
+    const { exitCode } = await m.waitForExit(terminalId); // let it finish naturally
+    expect(exitCode).toBe(0);
+
+    const t = (m as any).terminals.get(terminalId);
+    let signalled = false;
+    const origKill = t.proc.kill.bind(t.proc);
+    t.proc.kill = (...args: unknown[]) => {
+      signalled = true;
+      return origKill(...args);
+    };
+
+    m.kill(terminalId); // taskkill path (pid may still be defined on the exited proc)
+    exec?.(new Error("ERROR: not found"));
+    await new Promise((r) => setTimeout(r, 50));
+    // exitCode was already recorded — the fallback must not fire a late signal.
+    expect(signalled).toBe(false);
+    m.release(terminalId);
+  }, 15000);
+});

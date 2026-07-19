@@ -46,7 +46,12 @@
 
   function looksLikeFileRef(s) {
     if (!s || s.length > 200) return false;
-    const core = s.replace(/[:#].*$/, "");
+    if (s.includes("://")) return false; // URLs are never file refs
+    // Strip only a TRAILING line ref (`:12`, `:12-34`, `:12:5`, `#L12[-L34]`) —
+    // the shapes parseFileRef (src/file-ref.ts) can open. Stripping from the
+    // FIRST `:`/`#` collapsed `C:\work\file.ts` to `C` (the drive colon), so
+    // absolute Windows paths never linkified.
+    const core = s.replace(/(?::\d+(?:-\d+|:\d+)?|#L\d+(?:-L?\d+)?)$/i, "");
     if (/[\s"'`<>|&;]/.test(core)) return false;
     const m = core.match(/\.([A-Za-z0-9]+)$/);
     if (!m) return false;

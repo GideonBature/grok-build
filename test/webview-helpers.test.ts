@@ -21,10 +21,33 @@ describe("looksLikeFileRef", () => {
   it("accepts a path with a :line suffix and strips it before checking", () => {
     expect(looksLikeFileRef("src/sidebar.ts:42")).toBe(true);
     expect(looksLikeFileRef("media/chat.js:1-100")).toBe(true);
+    expect(looksLikeFileRef("src/sidebar.ts:12:5")).toBe(true); // compiler line:col
   });
 
   it("accepts a path with a #Lstart-Lend anchor", () => {
     expect(looksLikeFileRef("src/sidebar.ts#L10-L20")).toBe(true);
+  });
+
+  // The bug: stripping from the FIRST `:` collapsed `C:\work\file.ts` to `C`
+  // (the drive colon), so absolute Windows paths never linkified.
+  it("accepts absolute Windows paths, with and without a line suffix", () => {
+    expect(looksLikeFileRef("C:\\work\\file.ts")).toBe(true);
+    expect(looksLikeFileRef("C:\\work\\file.ts:42")).toBe(true);
+    expect(looksLikeFileRef("C:/work/file.ts:7-9")).toBe(true);
+    expect(looksLikeFileRef("c:\\Users\\p\\proj\\CLAUDE.md")).toBe(true);
+  });
+
+  it("still rejects an absolute Windows path with an unknown extension", () => {
+    expect(looksLikeFileRef("C:\\work\\file.xyz")).toBe(false);
+  });
+
+  it("rejects URLs even when they end in a known extension", () => {
+    expect(looksLikeFileRef("https://x.ai/a.ts")).toBe(false);
+    expect(looksLikeFileRef("file:///C:/work/file.ts")).toBe(false);
+  });
+
+  it("rejects a #fragment that is not a line anchor", () => {
+    expect(looksLikeFileRef("foo.ts#section")).toBe(false); // unopenable — parseFileRef can't split it
   });
 
   it("is case-insensitive on the extension", () => {

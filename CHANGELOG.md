@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.4 — 2026-07-19
+
+Eleven long-standing bugs found by running this extension through a multi-model bug-finding benchmark, then re-verified and fixed against the live tree — most of them Windows path handling. 42 new regression tests.
+
+### Fixed
+
+- **Windows path family:** drag-and-drop into the chat works on Windows (the dropped `file:///C:/…` URI was mis-stripped to `/C:/…` and silently failed); absolute Windows paths like `C:\work\file.ts` (with or without `:42`) now linkify in chat — and clicking any `path:line` ref now actually opens at that line; agent-sent `file://` media refs convert via a proper URI→path helper (drive letters + UNC hosts); session history now reads the same `~/.grok` the CLI writes (`GROK_HOME` override honored, USERPROFILE-first on Windows — a set `HOME`, e.g. git-bash, used to split them). ([media/chat.js](media/chat.js), [media/webview-helpers.js](media/webview-helpers.js), [src/file-ref.ts](src/file-ref.ts), [src/acp-dispatch.ts](src/acp-dispatch.ts), [src/sessions.ts](src/sessions.ts), [src/sidebar.ts](src/sidebar.ts))
+- **Crash recovery:** after the CLI process dies, the next send respawns and resumes the same session instead of writing into the dead client (which errored, or hung at "Grokking…", until you manually started a new session); a `taskkill` that runs-but-fails (Access Denied) no longer leaves the agent's `wait_for_exit` pending forever — a direct signal fallback fires; an error or exit during the startup lock can no longer strand the composer's locked state. ([src/sidebar.ts](src/sidebar.ts), [src/terminal-manager.ts](src/terminal-manager.ts), [media/chat.js](media/chat.js))
+- **Smaller correctness fixes:** full-line selections no longer attach one phantom line past the selection (VS Code selection ends are exclusive at column 0); Command Palette *New Session* clears the previous transcript like the toolbar button; the per-session webview reset clears the question/restored-card maps (a new session's tool updates could mutate the previous session's cards); generated media in a `..`-prefixed dir under grok home serves from disk instead of falling back to base64; the STT keyterm list enforces its documented 100-term cap. ([src/chips.ts](src/chips.ts), [src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js), [src/sessions.ts](src/sessions.ts), [src/voice.ts](src/voice.ts))
+
 ## 1.7.3 — 2026-07-18
 
 ### Fixed

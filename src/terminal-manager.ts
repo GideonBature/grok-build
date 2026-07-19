@@ -189,9 +189,17 @@ function terminalShell(): string | true {
  * Windows, /bin/sh elsewhere — see `resolveTerminalShell`) whose stdout+stderr
  * is captured into a single rolling buffer respecting `outputByteLimit`.
  */
+/** Injectable seams for tests — production callers pass nothing. */
+export interface TerminalManagerDeps {
+  execFileImpl?: typeof execFile;
+  platform?: NodeJS.Platform;
+}
+
 export class TerminalManager {
   private terminals = new Map<string, TerminalEntry>();
   private nextId = 1;
+
+  constructor(private deps: TerminalManagerDeps = {}) {}
 
   create(params: TerminalCreateParams): { terminalId: string } {
     const env = this.envFromParams(params.env);
@@ -269,10 +277,26 @@ export class TerminalManager {
     if (!t) return;
     const pid = t.proc.pid;
     try {
-      const plan: KillPlan = pid != null ? buildKillPlan(pid) : { kind: "signal", signal: "SIGTERM" };
+      const platform = this.deps.platform ?? process.platform;
+      const plan: KillPlan =
+        pid != null ? buildKillPlan(pid, platform) : { kind: "signal", signal: "SIGTERM" };
       if (plan.kind === "taskkill") {
-        // Fire-and-forget; the tree may already be gone (ignore the error).
-        execFile(plan.file, plan.args, () => { /* best-effort */ });
+        const exec = this.deps.execFileImpl ?? execFile;
+        exec(plan.file, plan.args, (err) => {
+          // taskkill can run-but-FAIL (Access Denied, protected child) with the
+          // tree still alive — fire-and-forget left the agent's wait_for_exit
+          // pending forever. Fall back to a direct signal so the exit listeners
+          // always eventually fire. (An already-gone tree errors too, but then
+          // exitCode is set and the signal is skipped; a signal racing a
+          // just-died wrapper is a harmless no-op.)
+          if (err && t.exitCode == null) {
+            try {
+              t.proc.kill("SIGTERM");
+            } catch {
+              /* ignore */
+            }
+          }
+        });
       } else {
         t.proc.kill(plan.signal);
       }

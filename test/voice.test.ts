@@ -351,6 +351,21 @@ describe("buildSttStreamUrl", () => {
     expect(url).toContain("keyterm=" + "a".repeat(50));
   });
 
+  it("enforces the documented 100-term cap (an oversized list must not 400 the socket)", () => {
+    const many = Array.from({ length: 150 }, (_, i) => `term${i}`);
+    const url = buildSttStreamUrl({ keyterms: many });
+    expect((url.match(/keyterm=/g) || []).length).toBe(100);
+    expect(url).toContain("keyterm=term99");
+    expect(url).not.toContain("keyterm=term100");
+  });
+
+  it("blanks don't consume cap slots", () => {
+    const terms = ["", ...Array.from({ length: 100 }, (_, i) => `t${i}`)];
+    const url = buildSttStreamUrl({ keyterms: terms });
+    expect((url.match(/keyterm=/g) || []).length).toBe(100);
+    expect(url).toContain("keyterm=t99");
+  });
+
   it("can turn interim results off", () => {
     expect(buildSttStreamUrl({ interimResults: false })).toContain("interim_results=false");
   });

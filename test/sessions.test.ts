@@ -13,9 +13,11 @@ import {
   fallbackName,
   indexSessions,
   isEmptyPrimerSession,
+  isPathInside,
   listSessions,
   readContextUsage,
   readSessionEntries,
+  resolveGrokHome,
   sessionsDirFor,
 } from "../src/sessions";
 
@@ -692,5 +694,65 @@ describe("isPrimerSummary guards fork naming (#48)", () => {
   it("leaves a real conversation title alone", () => {
     expect(isPrimerSummary("Evaluate GitHub issues for implementation priorities")).toBe(false);
     expect(isPrimerSummary("Analyze this solution in depth")).toBe(false);
+  });
+});
+
+// resolveGrokHome must read the SAME `.grok` the CLI writes. The CLI: `$GROK_HOME`
+// override first, else Rust std::env::home_dir() — which on Windows is
+// USERPROFILE-based and IGNORES HOME. The old `HOME || USERPROFILE` order split
+// session history from the CLI's store on Windows boxes with HOME set (git-bash).
+describe("resolveGrokHome", () => {
+  it("prefers USERPROFILE over HOME on Windows (matching the CLI + cli-locator)", () => {
+    const env = { HOME: "C:\\weird\\gitbash-home", USERPROFILE: "C:\\Users\\p" };
+    expect(resolveGrokHome(env, "win32")).toBe(path.join("C:\\Users\\p", ".grok"));
+  });
+
+  it("uses HOME on POSIX and never consults USERPROFILE there", () => {
+    const env = { HOME: "/home/p", USERPROFILE: "C:\\Users\\p" };
+    expect(resolveGrokHome(env, "linux")).toBe(path.join("/home/p", ".grok"));
+    expect(resolveGrokHome(env, "darwin")).toBe(path.join("/home/p", ".grok"));
+  });
+
+  it("honors the CLI's GROK_HOME override verbatim on every platform", () => {
+    const env = { GROK_HOME: "D:\\data\\grok-home", HOME: "/home/p", USERPROFILE: "C:\\Users\\p" };
+    expect(resolveGrokHome(env, "win32")).toBe("D:\\data\\grok-home");
+    expect(resolveGrokHome(env, "linux")).toBe("D:\\data\\grok-home");
+  });
+
+  it("falls back to os.homedir() when the platform env var is unset", () => {
+    // Windows with only HOME set: the CLI ignores HOME (Rust home_dir uses the
+    // profile dir), so we must not use it either.
+    const win = resolveGrokHome({ HOME: "C:\\weird" }, "win32");
+    expect(win.endsWith(".grok")).toBe(true);
+    expect(win).not.toBe(path.join("C:\\weird", ".grok"));
+    const posix = resolveGrokHome({}, "linux");
+    expect(posix.endsWith(".grok")).toBe(true);
+  });
+});
+
+// isPathInside backs isServableFromDisk (generated-media serving): a path-segment
+// boundary check, not a string-prefix one.
+describe("isPathInside", () => {
+  const root = path.join(path.sep === "\\" ? "C:\\Users\\p" : "/home/p", ".grok");
+
+  it("accepts a file below the root", () => {
+    expect(isPathInside(root, path.join(root, "sessions", "s1", "images", "out.png"))).toBe(true);
+  });
+
+  it("accepts a dir literally named with a leading double-dot (`..foo`)", () => {
+    // The old `!rel.startsWith("..")` string-prefix check rejected this legal
+    // name and forced the base64 fallback.
+    expect(isPathInside(root, path.join(root, "..foo", "x.jpg"))).toBe(true);
+  });
+
+  it("rejects the root itself and the parent traversal", () => {
+    expect(isPathInside(root, root)).toBe(false);
+    expect(isPathInside(root, path.join(root, ".."))).toBe(false);
+    expect(isPathInside(root, path.join(root, "..", "escape.png"))).toBe(false);
+  });
+
+  it("rejects an unrelated absolute path", () => {
+    const other = path.sep === "\\" ? "D:\\elsewhere\\x.png" : "/var/elsewhere/x.png";
+    expect(isPathInside(root, other)).toBe(false);
   });
 });

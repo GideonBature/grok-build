@@ -1754,6 +1754,10 @@
     state.toolItemsByToolCallId.clear();
     state.toolFailuresById.clear();
     state.subagentCards.clear();
+    // Question/restored-card maps too, or a new session's tool updates could
+    // attach to the previous session's (now-detached) cards by toolCallId.
+    state.questionToolCalls.clear();
+    state.restoredCardsByToolCallId.clear();
     state.pendingCommandDetails = [];
     state.toolExpandOverride = null; // the Expand/Collapse All latch is per-session; a swap/restore starts clean (the replay buffer re-applies it for a warm re-focus)
     state.turnAgentActionsEl = null;
@@ -5255,6 +5259,7 @@
         revealTurnFooter();
         addError(msg.text);
         state.busy = false;
+        state.busyLocked = false; // an error ends any startup lock too
         updateSendButton();
         break;
       case "agentEnd":
@@ -5271,8 +5276,9 @@
       case "exit":
         hideGrokking();
         hidePlanProcessing();
-        addError(`Grok exited (code ${msg.code}). Click the new session button to restart.`);
+        addError(`Grok exited (code ${msg.code}). Send a message to restart this session, or start a new one.`);
         state.busy = false;
+        state.busyLocked = false; // a dead process ends any startup lock too
         updateSendButton();
         break;
       case "queuedSends":
@@ -5636,9 +5642,12 @@
     if (!data) return;
     const uris = data.split(/\r?\n/).filter((l) => l && !l.startsWith("#"));
     for (const uri of uris) {
-      const m = uri.match(/^file:\/\/(.+)$/);
-      if (!m) continue;
-      vscode.postMessage({ type: "dropFile", path: decodeURIComponent(m[1]), shift: e.shiftKey });
+      if (!/^file:\/\//i.test(uri)) continue;
+      // Post the RAW URI — the host converts it with fileUriToPath, which
+      // handles the Windows drive-letter (`file:///C:/x` → `C:/x`) and UNC
+      // (`file://server/share`) forms that a naive `file://` strip broke
+      // (the leading-slash path failed existsSync, so drops died silently).
+      vscode.postMessage({ type: "dropFile", path: uri, shift: e.shiftKey });
     }
   });
 

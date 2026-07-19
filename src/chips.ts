@@ -66,6 +66,19 @@ export function extFromMime(mime: string): string {
   return ".png";
 }
 
+/** 1-based inclusive line range for a NON-EMPTY editor selection. VS Code
+ *  selection ends are exclusive: selecting whole lines puts `end` at character
+ *  0 of the NEXT line, so an end at column 0 (below the start line) does not
+ *  include that line — the old unconditional `end.line + 1` attached one line
+ *  the user never selected. */
+export function selectionLineRange(
+  start: { line: number; character: number },
+  end: { line: number; character: number },
+): { startLine: number; endLine: number } {
+  const endLine = end.character === 0 && end.line > start.line ? end.line : end.line + 1;
+  return { startLine: start.line + 1, endLine };
+}
+
 export function makeImplicitChip(
   absPath: string,
   relPath: string,

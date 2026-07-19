@@ -6,6 +6,8 @@
  * a child process.
  */
 
+import { fileUriToPath } from "./file-ref";
+
 export type DispatchEvent =
   | { kind: "response"; id: number | string; result?: any; error?: any }
   | { kind: "session-update"; update: any }
@@ -91,7 +93,9 @@ function mediaKindForPath(p: string): MediaKind | null {
 function refFromUri(media: MediaKind, uri: string, mimeType?: string): MediaRef {
   if (uri.startsWith("file://")) {
     try {
-      return { media, kind: "path", path: decodeURIComponent(new URL(uri).pathname), mimeType };
+      // fileUriToPath, not URL#pathname: the latter yields `/C:/x` for Windows
+      // URIs and drops UNC hosts entirely.
+      return { media, kind: "path", path: fileUriToPath(uri), mimeType };
     } catch {
       return { media, kind: "path", path: uri.replace(/^file:\/\//, ""), mimeType };
     }

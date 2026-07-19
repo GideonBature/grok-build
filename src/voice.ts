@@ -207,6 +207,9 @@ export interface SttStreamParams {
   keyterms?: string[];
 }
 
+/** The documented keyterm ceiling ("≤100 terms, ≤50 chars each"). */
+export const MAX_STT_KEYTERMS = 100;
+
 /** Build the streaming STT WebSocket URL. Config rides in query params (the
  *  endpoint takes no setup message); auth is a Bearer header set by the caller. */
 export function buildSttStreamUrl(params: SttStreamParams = {}): string {
@@ -214,9 +217,14 @@ export function buildSttStreamUrl(params: SttStreamParams = {}): string {
   qs.set("sample_rate", String(params.sampleRate ?? 16000));
   qs.set("encoding", params.encoding ?? "pcm");
   qs.set("interim_results", params.interimResults === false ? "false" : "true");
+  let appended = 0;
   for (const term of params.keyterms ?? []) {
+    if (appended >= MAX_STT_KEYTERMS) break; // enforce the doc'd cap, not just state it
     const t = (term || "").trim();
-    if (t) qs.append("keyterm", t.slice(0, 50));
+    if (t) {
+      qs.append("keyterm", t.slice(0, 50));
+      appended++;
+    }
   }
   return `${STT_STREAM_ENDPOINT}?${qs.toString()}`;
 }
