@@ -102,6 +102,12 @@
     activeToolGroupEl: null,
     slashFiltered: [],
     slashActive: 0,
+    // + / @ / # add menu: "button" | "mention" | null. Mention mode is opened by
+    // typing @ or # in the composer (Codex-style) and re-filters as you type;
+    // button mode is the toolbar + click and is not auto-closed by keystrokes.
+    addMenuSource: null,
+    addMenuItems: [],
+    addMenuActive: 0,
     pendingDiffByToolCallId: new Map(),
     toolItemsByToolCallId: new Map(),
     toolFailuresById: new Map(), // toolCallId → error text, so a single-call group carries it onto the flat
@@ -1034,6 +1040,9 @@
     addPopover.hidden = true;
     historyPopover.hidden = true;
     contextPopover.hidden = true;
+    state.addMenuSource = null;
+    state.addMenuItems = [];
+    state.addMenuActive = 0;
   }
 
   // Context details on demand (donut click): what's in the window, what the turns
@@ -1691,61 +1700,239 @@
     addPopover.appendChild(el);
   }
 
-  function addMenuItem(iconHtml, label, detail, onClick, opts) {
-    const item = document.createElement("div");
-    item.className = "toolbar-popover-item add-menu-item" + (opts && opts.danger ? " add-menu-danger" : "");
-    item.innerHTML =
-      `<span class="add-item-icon">${iconHtml || ""}</span>` +
-      `<span class="add-item-body">` +
-        `<span class="add-item-label">${escapeHtml(label)}</span>` +
-        (detail ? `<span class="add-item-desc">${escapeHtml(detail)}</span>` : "") +
-      `</span>`;
-    item.onclick = (e) => {
-      e.stopPropagation();
-      onClick();
-      closePopovers();
-    };
-    addPopover.appendChild(item);
+  /** Catalog for the + / @ / # add menu — single source for both the toolbar
+   *  button and the Codex-style mention trigger in the composer. */
+  function getAddMenuCatalog() {
+    return [
+      {
+        section: "Add",
+        id: "files",
+        label: "Files and folders",
+        detail: "Attach paths for Grok to read",
+        keys: "files folders attach path pick",
+        icon: ICON.paperclip || ICON.folder,
+        run: () => { vscode.postMessage({ type: "pickFile" }); },
+      },
+      {
+        section: "Add",
+        id: "plan",
+        label: "Plan mode",
+        detail: state.currentModeId === "plan"
+          ? "Already on — open mode picker to switch"
+          : "Turn plan mode on",
+        keys: "plan mode",
+        icon: ICON.listTree,
+        run: () => {
+          if (state.currentModeId !== "plan") {
+            vscode.postMessage({ type: "setMode", modeId: "plan" });
+          } else {
+            openModePopover();
+          }
+        },
+      },
+      {
+        section: "Session",
+        id: "new-worktree",
+        label: "New worktree session",
+        detail: "Isolated git checkout + new chat",
+        keys: "worktree new session git",
+        icon: ICON.gitBranch,
+        run: () => { vscode.postMessage({ type: "newWorktreeSession" }); },
+      },
+      {
+        section: "Session",
+        id: "fork-worktree",
+        label: "Fork into worktree",
+        detail: "Branch this conversation into a worktree",
+        keys: "fork worktree branch",
+        icon: ICON.gitBranch,
+        run: () => { vscode.postMessage({ type: "forkIntoWorktree" }); },
+      },
+      {
+        section: "Session",
+        id: "manage-worktrees",
+        label: "Manage worktrees",
+        detail: "Apply, open, or remove worktrees",
+        keys: "manage worktrees list",
+        icon: ICON.folder,
+        run: () => { vscode.postMessage({ type: "manageWorktrees" }); },
+      },
+      {
+        section: "Session",
+        id: "apply-worktree",
+        label: "Apply this worktree",
+        detail: "Ship differing files to the workspace",
+        keys: "apply worktree ship",
+        icon: ICON.upload,
+        run: () => { vscode.postMessage({ type: "applyFocusedWorktree" }); },
+      },
+      {
+        section: "Input",
+        id: "voice",
+        label: "Voice control",
+        detail: state.voiceConfigured ? "Dictate with the microphone" : "Set up voice (needs API key)",
+        keys: "voice mic dictate microphone speech",
+        icon: ICON.mic,
+        run: () => { if (micBtn) micBtn.click(); },
+      },
+    ];
   }
 
-  function openAddPopover() {
-    if (!addPopover.hidden) { closePopovers(); return; }
+  function filterAddMenuItems(query) {
+    const q = (query || "").toLowerCase().replace(/^[@#]/, "");
+    const catalog = getAddMenuCatalog();
+    if (!q) return catalog;
+    // Prefix-match tokens (label words + keys), not free substring — so "@fi"
+    // hits "Files and folders" but not "Ship differing files…" via "fi" in the middle.
+    const matches = (text) =>
+      String(text || "")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean)
+        .some((tok) => tok.startsWith(q));
+    return catalog.filter((item) =>
+      matches(item.label) ||
+      matches(item.keys) ||
+      // Whole-label prefix: "@files an" still works for "Files and folders".
+      item.label.toLowerCase().startsWith(q),
+    );
+  }
+
+  function pickAddMenuItem(item) {
+    if (!item) return;
+    // Consume a trailing @… / #… token when the menu was opened from the composer.
+    if (state.addMenuSource === "mention") consumeMentionToken();
+    const run = item.run;
     closePopovers();
+    run();
+    input.focus();
+  }
+
+  function renderAddMenu(items, activeIdx) {
     addPopover.innerHTML = "";
-
-    addMenuSection("Add");
-    addMenuItem(ICON.paperclip || ICON.folder, "Files and folders", "Attach paths for Grok to read", () => {
-      vscode.postMessage({ type: "pickFile" });
-    });
-    addMenuItem(ICON.listTree, "Plan mode", state.currentModeId === "plan" ? "Already on — open mode picker to switch" : "Turn plan mode on", () => {
-      if (state.currentModeId !== "plan") {
-        vscode.postMessage({ type: "setMode", modeId: "plan" });
-      } else {
-        openModePopover();
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "toolbar-popover-item add-menu-empty";
+      empty.textContent = "No matching actions";
+      addPopover.appendChild(empty);
+      return;
+    }
+    let lastSection = "";
+    let activeEl = null;
+    items.forEach((item, i) => {
+      if (item.section !== lastSection) {
+        addMenuSection(item.section);
+        lastSection = item.section;
       }
+      const el = document.createElement("div");
+      el.className = "toolbar-popover-item add-menu-item" + (i === activeIdx ? " active" : "");
+      if (i === activeIdx) activeEl = el;
+      el.innerHTML =
+        `<span class="add-item-icon">${item.icon || ""}</span>` +
+        `<span class="add-item-body">` +
+          `<span class="add-item-label">${escapeHtml(item.label)}</span>` +
+          (item.detail ? `<span class="add-item-desc">${escapeHtml(item.detail)}</span>` : "") +
+        `</span>`;
+      el.onclick = (e) => {
+        e.stopPropagation();
+        pickAddMenuItem(item);
+      };
+      addPopover.appendChild(el);
     });
+    if (activeEl) activeEl.scrollIntoView({ block: "nearest" });
+  }
 
-    addMenuSection("Session");
-    addMenuItem(ICON.gitBranch, "New worktree session", "Isolated git checkout + new chat", () => {
-      vscode.postMessage({ type: "newWorktreeSession" });
-    });
-    addMenuItem(ICON.gitBranch, "Fork into worktree", "Branch this conversation into a worktree", () => {
-      vscode.postMessage({ type: "forkIntoWorktree" });
-    });
-    addMenuItem(ICON.folder, "Manage worktrees", "Apply, open, or remove worktrees", () => {
-      vscode.postMessage({ type: "manageWorktrees" });
-    });
-    addMenuItem(ICON.upload, "Apply this worktree", "Ship differing files to the workspace", () => {
-      vscode.postMessage({ type: "applyFocusedWorktree" });
-    });
+  /**
+   * Open the shared Add menu. From the + button: toggle. From an @ / # mention
+   * in the composer: always rebuild + filter (no toggle), so typing continues
+   * to refine the list the way Codex does.
+   * @param {{ mention?: { trigger: string, query: string, start: number, end: number } }} [opts]
+   */
+  function openAddPopover(opts) {
+    const mention = opts && opts.mention;
+    if (!mention) {
+      // Toolbar + : toggle closed if already open from the button.
+      if (!addPopover.hidden && state.addMenuSource === "button") {
+        closePopovers();
+        return;
+      }
+      closePopovers();
+      state.addMenuSource = "button";
+    } else {
+      // Mention: hide other popovers (and slash) but keep rebuilding the add menu.
+      modePopover.hidden = true;
+      if (modelPopover) modelPopover.hidden = true;
+      gearPopover.hidden = true;
+      historyPopover.hidden = true;
+      contextPopover.hidden = true;
+      slashPopover.hidden = true;
+      state.addMenuSource = "mention";
+    }
 
-    addMenuSection("Input");
-    addMenuItem(ICON.mic, "Voice control", state.voiceConfigured ? "Dictate with the microphone" : "Set up voice (needs API key)", () => {
-      if (micBtn) micBtn.click();
-    });
-
+    const query = mention ? mention.query : "";
+    const items = filterAddMenuItems(query);
+    // Keep the active row stable when re-filtering: clamp to the new list.
+    let active = state.addMenuActive || 0;
+    if (active >= items.length) active = Math.max(0, items.length - 1);
+    // Fresh open (button, or first char of a mention) starts at the top.
+    if (!mention || !state.addMenuItems.length) active = 0;
+    state.addMenuItems = items;
+    state.addMenuActive = active;
+    renderAddMenu(items, active);
     positionPopover(addPopover, addBtn);
     addPopover.hidden = false;
+  }
+
+  /**
+   * Detect a trailing @ or # mention token at the caret — word-boundary only so
+   * emails (`user@host`) and mid-word hashes don't open the menu. Matches the
+   * token right before the caret: start-of-input / whitespace, then @|# , then
+   * a non-space query.
+   */
+  function getMentionAtCursor() {
+    const pos = input.selectionStart ?? 0;
+    const before = input.value.slice(0, pos);
+    const m = before.match(/(?:^|[\s\n])([@#])([^\s]*)$/);
+    if (!m) return null;
+    const query = m[2];
+    const start = before.length - query.length - 1; // index of @ or #
+    return { trigger: m[1], query, start, end: pos };
+  }
+
+  function consumeMentionToken() {
+    const m = getMentionAtCursor();
+    if (!m) return;
+    const v = input.value;
+    // Remove just the @query / #query; leave surrounding whitespace as typed.
+    input.value = v.slice(0, m.start) + v.slice(m.end);
+    const caret = m.start;
+    try { input.setSelectionRange(caret, caret); } catch { /* happy-dom / detached */ }
+    renderInputHighlight();
+  }
+
+  /** Keep the @ / # add menu in sync with the composer (Codex-style). */
+  function updateMention() {
+    // Slash commands at line-start win — don't fight the / autocomplete.
+    const slashOpen = !slashPopover.hidden && state.slashFiltered.length;
+    if (slashOpen) {
+      if (state.addMenuSource === "mention") {
+        addPopover.hidden = true;
+        state.addMenuSource = null;
+        state.addMenuItems = [];
+      }
+      return;
+    }
+    const mention = getMentionAtCursor();
+    if (mention) {
+      openAddPopover({ mention });
+      return;
+    }
+    if (state.addMenuSource === "mention") {
+      addPopover.hidden = true;
+      state.addMenuSource = null;
+      state.addMenuItems = [];
+      state.addMenuActive = 0;
+    }
   }
 
   // Fill the model popover with Reasoning + Model as one collection.
@@ -2682,10 +2869,17 @@
   // `detailShouldExpand` is group-agnostic.
   function groupShouldExpand(el) {
     if (state.toolExpandOverride !== null) return state.toolExpandOverride;
+    // Codex / Copilot-style: a group that carries an edit diff opens so the
+    // green/red lines are visible without a click. Command-only groups stay
+    // collapsed unless Expand tool details is on.
+    if (el && el.querySelector(".tool-item-diff")) return true;
     return state.expandCommandOutputs && !!(el && el.querySelector(".has-details"));
   }
-  function detailShouldExpand() {
+  function detailShouldExpand(detailsEl) {
     if (state.toolExpandOverride !== null) return state.toolExpandOverride;
+    // Edit diffs open by default (same as the permission-card preview). Command
+    // IN/OUT stays collapsed unless the setting/latch says otherwise.
+    if (detailsEl && detailsEl.classList.contains("tool-item-diff")) return true;
     return state.expandCommandOutputs;
   }
   // Open/close a group's body + chevron (safe on an in-progress group — the CSS
@@ -2709,7 +2903,7 @@
   // running batch opens/closes live (the reported gap).
   function applyExpandCommandOutputs() {
     for (const row of messagesEl.querySelectorAll(".has-details")) {
-      setDetailExpanded(row, detailShouldExpand());
+      setDetailExpanded(row, detailShouldExpand(row.querySelector(".tool-item-details")));
     }
     for (const group of messagesEl.querySelectorAll(".tool-group")) {
       setGroupExpanded(group, groupShouldExpand(group));
@@ -2736,6 +2930,9 @@
       if (e.target.closest(".tool-item-details")) return; // selecting text inside must not collapse
       details.hidden = !details.hidden;
       rowEl.classList.toggle("expanded", !details.hidden); // › ↔ v
+      // Remember an explicit user toggle so an echo→completed diff repaint
+      // doesn't re-open a detail the user just collapsed (mirrors group._userToggled).
+      rowEl._userToggledDetail = true;
     });
   }
 
@@ -2750,7 +2947,7 @@
 
     const details = document.createElement("div");
     details.className = "tool-item-details";
-    details.hidden = !detailShouldExpand(); // latch, else grok.expandCommandOutputs, opens new rows pre-expanded
+    details.hidden = !detailShouldExpand(details); // latch / expand setting; command IN/OUT stays collapsed by default
     const block = document.createElement("div");
     block.className = "cmd-block";
     const inRow = document.createElement("div");
@@ -3030,7 +3227,12 @@
 
       details = document.createElement("div");
       details.className = "tool-item-details tool-item-diff";
-      details.hidden = !detailShouldExpand();
+      // Edit diffs open by default (Codex-style); the latch can still force-collapse.
+      details.hidden = !detailShouldExpand(details);
+    } else {
+      // Re-apply expand policy on repaint (echo → completed upgrade) so a newly
+      // classified edit detail still opens unless the user already toggled it.
+      if (!item._userToggledDetail) details.hidden = !detailShouldExpand(details);
     }
     while (details.firstChild) details.removeChild(details.firstChild);
     // One region + ONE "open diff →" per BLOCK (not per site) — the link's payload
@@ -3049,6 +3251,10 @@
     if (fresh) {
       item.appendChild(details);
       wireCommandToggle(item, details, "Show the diff");
+      // Open the parent group so the always-visible inline diff isn't trapped
+      // inside a collapsed body (Codex / Copilot show the change as it lands).
+      const group = item.closest && item.closest(".tool-group");
+      if (group && !group._userToggled) setGroupExpanded(group, groupShouldExpand(group));
     }
     scrollToBottom();
   }
@@ -4056,12 +4262,35 @@
 
     const diff = state.pendingDiffByToolCallId.get(req.toolCall?.toolCallId);
     if (diff) {
+      // Codex / Copilot-style: show the green/red lines right on the card so the
+      // review happens in-chat. The native "open diff →" tab is a secondary action
+      // (still auto-opened once for the side-by-side editor, #21).
+      const sites = Array.isArray(diff.sites) && diff.sites.length
+        ? diff.sites
+        : [{ oldText: diff.oldText || "", newText: diff.newText || "" }];
+      let added = 0;
+      let removed = 0;
+      const hunks = [];
+      for (const site of sites) {
+        const result = computeLineDiff(site.oldText || "", site.newText || "");
+        added += result.added;
+        removed += result.removed;
+        hunks.push({ site, result });
+      }
+
       const subtitle = document.createElement("div");
-      subtitle.className = "card-subtitle";
-      const oldLines = (diff.oldText || "").split("\n").length;
-      const newLines = (diff.newText || "").split("\n").length;
-      subtitle.textContent = `${diff.path} — ${oldLines} → ${newLines} lines`;
+      subtitle.className = "card-subtitle perm-diff-meta";
+      const pathEl = document.createElement("span");
+      pathEl.className = "perm-diff-path";
+      pathEl.textContent = diff.path || "file";
+      subtitle.appendChild(pathEl);
+      subtitle.appendChild(document.createTextNode(" "));
+      subtitle.appendChild(makeDiffStat(added, removed));
       el.appendChild(subtitle);
+
+      const region = buildInlineDiffRegion(hunks);
+      region.classList.add("perm-diff-region");
+      el.appendChild(region);
 
       const openDiff = () =>
         vscode.postMessage({
@@ -4074,11 +4303,12 @@
       const preview = document.createElement("button");
       preview.className = "preview-link";
       // Auto-opens below; the button stays so you can re-open if you closed it.
-      preview.textContent = "open diff →";
+      preview.textContent = "open full diff →";
       preview.onclick = openDiff;
       el.appendChild(preview);
-      // Open the diff automatically when the card appears, so reviewing an edit
-      // is one glance + one click on the decision — no "open diff" step (#21).
+      // Open the native side-by-side editor once when the card appears (#21) so a
+      // larger change can be reviewed next to the chat; the inline region above is
+      // the always-visible glanceable surface.
       openDiff();
     }
 
@@ -4638,12 +4868,25 @@
   function updateSlash() {
     const m = (input.value.slice(0, input.selectionStart || 0)).match(/(?:^|\n)\/(\S*)$/);
     if (!m) { slashPopover.hidden = true; state.slashFiltered = []; return; }
+    // A live slash match displaces a mention-driven add menu (and vice-versa
+    // is handled in updateMention). Keep both from fighting for Enter/arrows.
+    if (state.addMenuSource === "mention") {
+      addPopover.hidden = true;
+      state.addMenuSource = null;
+      state.addMenuItems = [];
+    }
     const q = m[1].toLowerCase();
     state.slashFiltered = state.commands.filter((c) => c.name.toLowerCase().startsWith(q));
     if (!state.slashFiltered.length) { slashPopover.hidden = true; return; }
     state.slashActive = 0;
     renderSlash();
     slashPopover.hidden = false;
+  }
+
+  /** Slash + @/# mention menus — one call site from input/paste handlers. */
+  function updateComposerMenus() {
+    updateSlash();
+    updateMention();
   }
 
   function renderSlash() {
@@ -4742,7 +4985,7 @@
     queueOutgoing(t);
     input.value = "";
     renderInputHighlight(); // also flips the busy button back to Stop (empty composer)
-    updateSlash();
+    updateComposerMenus();
     return true;
   }
 
@@ -5927,7 +6170,7 @@
       const start = input.selectionStart ?? input.value.length;
       const end = input.selectionEnd ?? start;
       input.setRangeText(pastedText, start, end, "end");
-      updateSlash();
+      updateComposerMenus();
       renderInputHighlight();
     }
     for (const blob of blobs) {
@@ -5945,7 +6188,7 @@
     }
   });
 
-  input.addEventListener("input", () => { updateSlash(); renderInputHighlight(); });
+  input.addEventListener("input", () => { updateComposerMenus(); renderInputHighlight(); });
   input.addEventListener("scroll", () => {
     if (!inputHighlight) return;
     inputHighlight.scrollTop = input.scrollTop;
@@ -5976,6 +6219,36 @@
         pickSlash(state.slashFiltered[state.slashActive]); return;
       }
       if (e.key === "Escape") { slashPopover.hidden = true; return; }
+    }
+    // @ / # add menu (Codex-style) — keyboard nav while the menu is open from
+    // a mention token. Button-opened menus are click-driven (focus is on the
+    // + button path); mention keeps focus in the textarea.
+    if (!addPopover.hidden && state.addMenuSource === "mention" && state.addMenuItems.length) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        state.addMenuActive = (state.addMenuActive + 1) % state.addMenuItems.length;
+        renderAddMenu(state.addMenuItems, state.addMenuActive);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        state.addMenuActive = (state.addMenuActive - 1 + state.addMenuItems.length) % state.addMenuItems.length;
+        renderAddMenu(state.addMenuItems, state.addMenuActive);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault();
+        pickAddMenuItem(state.addMenuItems[state.addMenuActive]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        // Drop the @/# token so Escape doesn't leave a dangling trigger that
+        // reopens the menu on the next keystroke.
+        consumeMentionToken();
+        closePopovers();
+        return;
+      }
     }
     const sendKey = state.useCtrlEnter
       ? e.key === "Enter" && (e.metaKey || e.ctrlKey)

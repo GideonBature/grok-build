@@ -2,10 +2,11 @@
 // the REAL shipped media/chat.js in a happy-dom window. It seeds the edit diff
 // (via the toolCallUpdate the host posts), renders the permission card, and
 // asserts the webview now:
-//   - auto-opens the diff (posts `openDiff`) the moment the card appears,
+//   - shows a Codex-style inline green/red diff on the card itself,
+//   - auto-opens the native side-by-side editor (posts `openDiff`) when the card appears,
 //   - carries the `requestId` on both `openDiff` and `permissionAnswer` so the
 //     host can pair the auto-opened tab with the answer and close it,
-//   - still offers a manual "open diff →" button to re-open it.
+//   - still offers a manual "open full diff →" button to re-open it.
 import { describe, it, expect } from "vitest";
 import { bootWebview, dispatch, click } from "./webview-harness";
 
@@ -29,13 +30,25 @@ function seedDiffAndCard(window: any, requestId: number | string = 7) {
 }
 
 describe("permission card diff preview (real chat.js in a DOM)", () => {
-  it("auto-opens the diff with the file content and requestId when the card appears", () => {
+  it("auto-opens the native diff and shows an inline Codex-style preview on the card", () => {
     const { window, posted, doc } = bootWebview();
     seedDiffAndCard(window, 7);
 
     const card = doc.querySelector(".card.permission");
     expect(card).not.toBeNull();
     expect(card!.querySelector(".card-subtitle")!.textContent).toContain("src/foo.ts");
+    // +2 −1 from "a\\nb" → "a\\nB\\nc" (same as the tool-row #45 surface).
+    expect(card!.querySelector(".diff-stat-add")!.textContent).toBe("+2");
+    expect(card!.querySelector(".diff-stat-del")!.textContent).toBe("−1");
+
+    const region = card!.querySelector(".tool-diff-region.perm-diff-region") as HTMLElement;
+    expect(region).not.toBeNull();
+    const adds = [...region.querySelectorAll(".tdl-add .tdl-code")].map((s) => s.textContent);
+    const dels = [...region.querySelectorAll(".tdl-del .tdl-code")].map((s) => s.textContent);
+    expect(adds).toEqual(["B", "c"]);
+    expect(dels).toEqual(["b"]);
+    expect([...region.querySelectorAll(".tdl-add .tdl-sign")].map((s) => s.textContent)).toEqual(["+", "+"]);
+    expect(region.querySelector(".tdl-del .tdl-sign")!.textContent).toBe("-");
 
     const openDiffs = posted.filter((m: any) => m.type === "openDiff");
     expect(openDiffs).toHaveLength(1);
@@ -48,13 +61,13 @@ describe("permission card diff preview (real chat.js in a DOM)", () => {
     });
   });
 
-  it("keeps a manual 'open diff' button that re-opens the same diff", () => {
+  it("keeps a manual 'open full diff' button that re-opens the same diff", () => {
     const { window, posted, doc } = bootWebview();
     seedDiffAndCard(window, 9);
 
     const btn = doc.querySelector(".card.permission .preview-link") as HTMLButtonElement;
     expect(btn).not.toBeNull();
-    expect(btn.textContent).toContain("open diff");
+    expect(btn.textContent).toContain("open full diff");
     click(window, btn);
 
     const openDiffs = posted.filter((m: any) => m.type === "openDiff");

@@ -64,7 +64,7 @@ describe("single-edit tool group stays expandable + reviewable (#30, #45)", () =
     expect(openDiffs[0]).toMatchObject({ path: "src/foo.ts", oldText: "a\nb", newText: "a\nB\nc" });
   });
 
-  it("collapsed by default; expanding the group then the row reveals the diff", () => {
+  it("edit diffs open by default (Codex-style); the row can still collapse", () => {
     const { window, doc } = bootWebview();
 
     dispatch(window, { type: "toolCall", call: EDIT_CALL });
@@ -75,21 +75,20 @@ describe("single-edit tool group stays expandable + reviewable (#30, #45)", () =
     const body = group.querySelector(".tool-group-body") as HTMLElement;
     const item = group.querySelector(".tool-item") as HTMLElement;
     const details = item.querySelector(".tool-item-details") as HTMLElement;
-    expect(body.hidden).toBe(true); // group collapsed by default (setting off)
-    expect(details.hidden).toBe(true); // diff collapsed by default
-
-    click(window, group.querySelector(".tool-group-header")!);
+    // Edit groups + their inline diffs open as they land — no expand click needed.
     expect(body.hidden).toBe(false);
-
-    click(window, item); // expand the row
     expect(details.hidden).toBe(false);
     expect(item.classList.contains("expanded")).toBe(true);
+    expect(group.classList.contains("expanded")).toBe(true);
 
-    click(window, item); // collapse again
+    click(window, item); // collapse the row
     expect(details.hidden).toBe(true);
+
+    click(window, item); // re-expand
+    expect(details.hidden).toBe(false);
   });
 
-  it("clicking 'open diff →' inside the detail does not toggle the row", () => {
+  it("clicking 'open full diff →' inside the detail does not toggle the row", () => {
     const { window, doc, posted } = bootWebview();
     dispatch(window, { type: "toolCall", call: EDIT_CALL });
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "tc1", content: [DIFF] } });
@@ -97,8 +96,7 @@ describe("single-edit tool group stays expandable + reviewable (#30, #45)", () =
 
     const item = doc.querySelector(".tool-item") as HTMLElement;
     const details = item.querySelector(".tool-item-details") as HTMLElement;
-    click(window, item); // open the row
-    expect(details.hidden).toBe(false);
+    expect(details.hidden).toBe(false); // already open by default
     click(window, details.querySelector(".preview-link")!);
     expect(details.hidden).toBe(false); // still open — the button doesn't collapse the row
     expect(posted.filter((m: any) => m.type === "openDiff")).toHaveLength(1);
@@ -246,14 +244,15 @@ describe("edit totals paint mid-turn, before the batch closes (#45 follow-up)", 
     expect(label().querySelectorAll(".diff-stat")).toHaveLength(1);
   });
 
-  it("a running batch with a landed edit diff stays COLLAPSED (only the setting/latch expand it)", () => {
+  it("a running batch with a landed edit diff opens so the change is visible mid-turn", () => {
     const { window, doc } = bootWebview();
     edit(window, "e1", "alpha.txt", "W1", "G1");
-    // Totals are visible on the header, but nothing auto-opened.
+    // Totals on the header AND the inline green/red lines — Codex-style, as it lands.
     expect(doc.querySelector(".tool-group-label")!.querySelector(".diff-stat")).not.toBeNull();
-    expect((doc.querySelector(".tool-group-body") as HTMLElement).hidden).toBe(true);
-    expect((doc.querySelector(".tool-item-details") as HTMLElement).hidden).toBe(true);
-    expect(doc.querySelector(".tool-group")!.classList.contains("expanded")).toBe(false);
+    expect((doc.querySelector(".tool-group-body") as HTMLElement).hidden).toBe(false);
+    expect((doc.querySelector(".tool-item-details") as HTMLElement).hidden).toBe(false);
+    expect(doc.querySelector(".tool-group")!.classList.contains("expanded")).toBe(true);
+    expect(doc.querySelector(".tool-diff-region")).not.toBeNull();
   });
 });
 
@@ -297,11 +296,12 @@ describe("the authoritative completed diff corrects the optimistic echo (#45 fol
 
     const item = doc.querySelector(".tool-item") as HTMLElement;
     const details = () => doc.querySelector(".tool-item-details") as HTMLElement;
-    expect(details().hidden).toBe(true);
-    click(window, item); // one click → open (a double-bound listener would toggle twice = no-op)
+    // Edit diffs open by default; one click collapses (a double-bound listener would toggle twice = no-op).
     expect(details().hidden).toBe(false);
     click(window, item);
     expect(details().hidden).toBe(true);
+    click(window, item);
+    expect(details().hidden).toBe(false);
   });
 
   it("an identical repaint is still a no-op (buffer replay stays idempotent)", () => {
@@ -309,7 +309,7 @@ describe("the authoritative completed diff corrects the optimistic echo (#45 fol
     dispatch(window, { type: "toolCall", call: EDIT_CALL });
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "tc1", content: [DIFF] } });
     const item = doc.querySelector(".tool-item")!;
-    click(window, item); // user opens the diff
+    // Already open by default; leave it open and confirm a replay doesn't re-collapse or double-render.
     expect((doc.querySelector(".tool-item-details") as HTMLElement).hidden).toBe(false);
 
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "tc1", content: [DIFF] } }); // replay
@@ -338,9 +338,9 @@ describe("a manual expand of a running tool group survives the batch closing", (
   };
   const groupBody = (doc: Document) => doc.querySelector(".tool-group-body") as HTMLElement;
 
-  it("stays expanded when the user opened it mid-execution", () => {
+  it("stays expanded when the user left it open mid-execution", () => {
     const { window, doc } = startBatch();
-    click(window, doc.querySelector(".tool-group-header")!); // user expands mid-run
+    // Edit groups already open when the diff lands; leave it open.
     expect(groupBody(doc).hidden).toBe(false);
 
     dispatch(window, { type: "promptComplete", meta: {} }); // batch closes
@@ -357,27 +357,25 @@ describe("a manual expand of a running tool group survives the batch closing", (
     });
     dispatch(window, { type: "toolCall", call: EDIT_CALL });
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "tc1", content: [DIFF] } });
-    // A running group is collapsed even with the setting on (it only auto-opens at
-    // close), so reaching "the user deliberately closed it" takes open-then-close.
+    // Edit groups open as the diff lands; one header click deliberately closes.
     const hdr = doc.querySelector(".tool-group-header")!;
-    click(window, hdr); // open
     expect(groupBody(doc).hidden).toBe(false);
-    click(window, hdr); // and deliberately close again
+    click(window, hdr); // deliberately close
     expect(groupBody(doc).hidden).toBe(true);
 
     dispatch(window, { type: "promptComplete", meta: {} });
     expect(groupBody(doc).hidden).toBe(true); // user intent beats the setting's auto-open
   });
 
-  it("still settles to the default when the user never touched it", () => {
+  it("still settles to the edit-open default when the user never touched it", () => {
     const { window, doc } = startBatch();
     dispatch(window, { type: "promptComplete", meta: {} });
-    expect(groupBody(doc).hidden).toBe(true); // unchanged default behavior
+    expect(groupBody(doc).hidden).toBe(false); // edit diffs stay open by default
   });
 
   it("an explicit Collapse All still overrides a manual expand", () => {
     const { window, doc } = startBatch();
-    click(window, doc.querySelector(".tool-group-header")!);
+    // Already open (edit default); leave it open through batch close.
     dispatch(window, { type: "promptComplete", meta: {} });
     expect(groupBody(doc).hidden).toBe(false);
 
@@ -616,12 +614,12 @@ describe("a replace_all renders one hunk per replaced site (_meta.details[])", (
     });
   });
 
-  it("stays COLLAPSED with a multi-site diff (only the setting/latch expand it)", () => {
+  it("opens with a multi-site diff so every replaced site is visible", () => {
     const { window, doc } = boot(three);
     dispatch(window, { type: "promptComplete", meta: {} });
-    expect((doc.querySelector(".tool-group-body") as HTMLElement).hidden).toBe(true);
-    expect((doc.querySelector(".tool-item-details") as HTMLElement).hidden).toBe(true);
-    expect(doc.querySelector(".tool-group")!.classList.contains("expanded")).toBe(false);
+    expect((doc.querySelector(".tool-group-body") as HTMLElement).hidden).toBe(false);
+    expect((doc.querySelector(".tool-item-details") as HTMLElement).hidden).toBe(false);
+    expect(doc.querySelector(".tool-group")!.classList.contains("expanded")).toBe(true);
   });
 
   // The echo can only ever paint ONE approximate hunk (no details[], and its block
@@ -659,9 +657,11 @@ describe("a replace_all renders one hunk per replaced site (_meta.details[])", (
     expect(label.querySelector(".diff-stat-del")!.textContent).toBe("−3");
 
     // The upgraded row keeps ONE working toggle (the detail node was REUSED, so no
-    // listener is stranded on a detached node and none is double-bound).
+    // listener is stranded on a detached node and none is double-bound). Edit diffs
+    // open by default — one click collapses, a second re-opens.
     const details = () => doc.querySelector(".tool-item-details") as HTMLElement;
-    click(window, doc.querySelector(".tool-group-header")!);
+    expect(details().hidden).toBe(false);
+    click(window, item());
     expect(details().hidden).toBe(true);
     click(window, item());
     expect(details().hidden).toBe(false);

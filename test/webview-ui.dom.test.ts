@@ -1080,6 +1080,78 @@ describe("composer model/effort chips + richer + menu (Codex-style polish)", () 
     click(window, files);
     expect(posted).toContainEqual({ type: "pickFile" });
   });
+
+  it("opens the same + menu from an @ mention in the composer (Codex-style)", () => {
+    const { window, posted, doc } = bootWebview();
+    const input = $(doc, "input") as HTMLTextAreaElement;
+    const pop = $(doc, "add-popover");
+    input.value = "@";
+    input.selectionStart = input.selectionEnd = 1;
+    input.dispatchEvent(new (window as any).Event("input", { bubbles: true }));
+
+    expect((pop as any).hidden).toBe(false);
+    const labels = [...pop.querySelectorAll(".add-item-label")].map((l) => l.textContent);
+    expect(labels).toContain("Files and folders");
+    expect(labels).toContain("Plan mode");
+    expect(labels).toContain("New worktree session");
+
+    // Typing filters the shared catalog (prefix match on label/key tokens).
+    input.value = "@fi";
+    input.selectionStart = input.selectionEnd = 3;
+    input.dispatchEvent(new (window as any).Event("input", { bubbles: true }));
+    expect([...pop.querySelectorAll(".add-item-label")].map((l) => l.textContent)).toEqual([
+      "Files and folders",
+    ]);
+
+    // Enter accepts the active row and strips the @token.
+    input.dispatchEvent(new (window as any).KeyboardEvent("keydown", {
+      key: "Enter", bubbles: true, cancelable: true,
+    }));
+    expect(posted).toContainEqual({ type: "pickFile" });
+    expect(input.value).toBe("");
+    expect((pop as any).hidden).toBe(true);
+  });
+
+  it("opens the + menu from a # mention and ignores mid-word emails", () => {
+    const { window, doc } = bootWebview();
+    const input = $(doc, "input") as HTMLTextAreaElement;
+    const pop = $(doc, "add-popover");
+
+    input.value = "hello#";
+    input.selectionStart = input.selectionEnd = 6;
+    input.dispatchEvent(new (window as any).Event("input", { bubbles: true }));
+    // No word boundary before # (letter immediately before) → stay closed.
+    // Wait: "hello#" has letter before #, so should NOT open.
+    expect((pop as any).hidden).toBe(true);
+
+    input.value = "user@host";
+    input.selectionStart = input.selectionEnd = 9;
+    input.dispatchEvent(new (window as any).Event("input", { bubbles: true }));
+    expect((pop as any).hidden).toBe(true);
+
+    input.value = "see #";
+    input.selectionStart = input.selectionEnd = 5;
+    input.dispatchEvent(new (window as any).Event("input", { bubbles: true }));
+    expect((pop as any).hidden).toBe(false);
+    expect([...pop.querySelectorAll(".add-item-label")].map((l) => l.textContent)).toContain("Files and folders");
+  });
+
+  it("does not open the @ menu while a slash command is being typed", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, {
+      type: "commandsUpdate",
+      commands: [{ name: "review", description: "Review changes" }],
+    });
+    const input = $(doc, "input") as HTMLTextAreaElement;
+    const addPop = $(doc, "add-popover");
+    const slashPop = $(doc, "slash-popover");
+
+    input.value = "/rev";
+    input.selectionStart = input.selectionEnd = 4;
+    input.dispatchEvent(new (window as any).Event("input", { bubbles: true }));
+    expect((slashPop as any).hidden).toBe(false);
+    expect((addPop as any).hidden).toBe(true);
+  });
 });
 
 describe("thinking traces toggle (#26)", () => {

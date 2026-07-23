@@ -1595,6 +1595,16 @@ textarea#input {
   align-items: flex-start;
   gap: 8px;
 }
+.toolbar-popover-item.add-menu-item.active {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+.toolbar-popover-item.add-menu-empty {
+  opacity: 0.7;
+  cursor: default;
+  font-size: 12px;
+  pointer-events: none;
+}
 /* Same 28px hit-target + 8px radius as .icon-btn so the mode button's icon
    size and highlight height match the gear/history/new buttons exactly. */
 .toolbar-btn {
@@ -2081,6 +2091,29 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
 .card .card-subtitle {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
+}
+/* Permission-card edit preview — same Codex-style rows as tool-item diffs, always
+   visible so you don't have to open the native editor just to see the change. */
+.card.permission .perm-diff-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-family: var(--vscode-editor-font-family);
+}
+.card.permission .perm-diff-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card.permission .perm-diff-region {
+  margin: 0;
+  /* A bit taller than tool-row diffs — this is the primary review surface. */
+  max-height: 360px;
+}
+.card.permission .preview-link {
+  align-self: flex-start;
 }
 .card .card-actions {
   display: flex;

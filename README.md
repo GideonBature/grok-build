@@ -27,7 +27,7 @@ _Click any feature to expand._
 <details>
 <summary><strong>Permission cards with diff preview</strong> — see every edit in VS Code's native diff before you approve</summary>
 
-When Grok proposes an edit, hit **open diff →** to review it in VS Code's native diff editor, then *Allow once / always* or *Reject*. The file is written only **after** you approve.
+When Grok proposes an edit, the permission card shows a **Codex-style inline diff** (green/red lines + `+N −M`) right in chat — and **open full diff →** opens VS Code's native side-by-side editor. Then *Allow once / always* or *Reject*. The file is written only **after** you approve.
 
 ![Permission card with a native VS Code diff preview before approval](docs/screenshots/permission_diff.png)
 
@@ -72,7 +72,7 @@ It works out of the box once you're signed in (your `grok login` token is reused
 <details>
 <summary><strong>File chips</strong> — your editor and selection as <code>@file</code> context</summary>
 
-The active editor rides along automatically; add more by dragging from the Explorer, right-click → **Grok: Send File**, **Alt+G**, or the **+** button. Chips send as `@/path` references, so content stays current and history stays small. **Shift-drag** embeds the file inline instead.
+The active editor rides along automatically; add more by dragging from the Explorer, right-click → **Grok: Send File**, **Alt+G**, the **+** button, or typing **`@`** / **`#`** in the composer (same menu as **+**, Codex-style). Chips attach as removable context for Grok to read. **Shift-drag** embeds the file inline instead.
 
 ![Composer with an image, a file, and a selection chip attached](docs/screenshots/file_chips.png)
 
