@@ -188,7 +188,17 @@
     startingPhase: false,
     // Extension version (from initialState) — shown in the gear → About panel.
     extVersion: "",
-    // Which gear-popover view is showing ("main"|"model"|"about"|"config"), so an
+    // MCP manager panel state (gear → MCP servers). Host-owned via mcpState.
+    mcp: {
+      servers: [],
+      loading: false,
+      error: null,
+      healthy: 0,
+      failing: 0,
+      unknown: 0,
+      notice: null,
+    },
+    // Which gear-popover view is showing ("main"|"model"|"about"|"config"|"mcp"), so an
     // async grokUpdateStatus only re-renders About when it's the visible view.
     gearView: "main",
     // Latest `grok update --check` result for the About panel: { checking } while
@@ -1221,6 +1231,7 @@
 
   function renderGearMain() {
     state.gearView = "main";
+    gearPopover.classList.remove("mcp-panel");
     gearPopover.innerHTML = "";
 
     // ── Model + effort header ─────────────────────────────────────────────
@@ -1450,9 +1461,9 @@
       vscode.postMessage({ type: "openProjectConfig" });
       closePopovers();
     });
-    addGearItem('<span>MCP servers</span><span class="popover-external">↗</span>', () => {
-      vscode.postMessage({ type: "runMcpList" });
-      closePopovers();
+    addGearItem("<span>MCP servers</span>", () => {
+      renderMcpPanel();
+      vscode.postMessage({ type: "mcpRefresh", doctor: true });
     });
     addGearItem("<span>Show extension logs</span>", () => {
       vscode.postMessage({ type: "showLogs" });
@@ -1515,6 +1526,133 @@
     renderAboutPanel(true);
     positionPopover(gearPopover, gearBtn);
     gearPopover.hidden = false;
+  }
+
+  function openMcpPanel() {
+    closePopovers();
+    renderMcpPanel();
+    positionPopover(gearPopover, gearBtn);
+    gearPopover.hidden = false;
+    vscode.postMessage({ type: "mcpRefresh", doctor: true });
+  }
+
+  const MCP_PRESET_UI = [
+    { id: "figma", label: "Figma", hint: "Remote · OAuth" },
+    { id: "github", label: "GitHub", hint: "PAT · issues & PRs" },
+    { id: "gitlab", label: "GitLab", hint: "Remote · OAuth" },
+  ];
+
+  function mcpStatusDotClass(healthy) {
+    if (healthy === true) return "mcp-dot ok";
+    if (healthy === false) return "mcp-dot bad";
+    return "mcp-dot unk";
+  }
+
+  function renderMcpPanel() {
+    state.gearView = "mcp";
+    gearPopover.classList.add("mcp-panel");
+    gearPopover.innerHTML = "";
+    addGearItem('<span class="popover-back">← MCP servers</span>', () => {
+      gearPopover.classList.remove("mcp-panel");
+      renderGearMain();
+    });
+
+    const m = state.mcp;
+    if (m.loading) {
+      addGearInfo('<span class="muted loading-dots">Checking</span>');
+    } else {
+      const n = (m.servers && m.servers.length) || 0;
+      const summary =
+        n === 0
+          ? "No MCP servers configured"
+          : `${n} server${n === 1 ? "" : "s"}` +
+            (m.healthy ? ` · ${m.healthy} connected` : "") +
+            (m.failing ? ` · ${m.failing} need attention` : "");
+      addGearInfo(`<span class="muted">${escapeHtml(summary)}</span>`);
+    }
+
+    if (m.error) {
+      const err = document.createElement("div");
+      err.className = "popover-fineprint mcp-error";
+      err.textContent = m.error;
+      gearPopover.appendChild(err);
+    }
+    if (m.notice && !m.loading) {
+      const note = document.createElement("div");
+      note.className = "popover-fineprint";
+      note.textContent = m.notice;
+      gearPopover.appendChild(note);
+    }
+
+    addSection("Connected");
+    if (!m.loading && (!m.servers || m.servers.length === 0)) {
+      addGearInfo('<span class="muted">None yet — connect one below</span>');
+    } else {
+      for (const s of m.servers || []) {
+        const row = document.createElement("div");
+        row.className = "mcp-server-row";
+        const title = document.createElement("div");
+        title.className = "mcp-server-title";
+        title.innerHTML =
+          `<span class="${mcpStatusDotClass(s.healthy)}"></span>` +
+          `<span class="mcp-server-name">${escapeHtml(s.name)}</span>` +
+          `<span class="mcp-server-meta muted">${escapeHtml(s.statusLabel)} · ${escapeHtml(s.scope)}</span>`;
+        row.appendChild(title);
+        if (s.target) {
+          const tgt = document.createElement("div");
+          tgt.className = "mcp-server-target muted";
+          tgt.textContent = s.target;
+          tgt.title = s.target;
+          row.appendChild(tgt);
+        }
+        if (s.detail && s.healthy !== true) {
+          const det = document.createElement("div");
+          det.className = "mcp-server-detail muted";
+          det.textContent = s.detail;
+          det.title = s.detail;
+          row.appendChild(det);
+        }
+        const actions = document.createElement("div");
+        actions.className = "mcp-server-actions";
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "mcp-action-btn";
+        rm.textContent = "Remove";
+        rm.onclick = (e) => {
+          e.stopPropagation();
+          vscode.postMessage({ type: "mcpRemove", name: s.name, scope: s.scope === "project" ? "project" : "user" });
+        };
+        actions.appendChild(rm);
+        row.appendChild(actions);
+        gearPopover.appendChild(row);
+      }
+    }
+
+    addSection("Connect");
+    for (const p of MCP_PRESET_UI) {
+      addGearItem(
+        `<span>${escapeHtml(p.label)}</span><span class="muted popover-hint">${escapeHtml(p.hint)}</span>`,
+        () => {
+          vscode.postMessage({ type: "mcpAddPreset", presetId: p.id, scope: "user" });
+        },
+      );
+    }
+
+    addGearSep();
+    addGearItem("<span>Refresh status</span>", () => {
+      vscode.postMessage({ type: "mcpRefresh", doctor: true });
+      renderMcpPanel();
+    });
+    addGearItem("<span>Apply to this session</span>", () => {
+      vscode.postMessage({ type: "mcpApplyRestart" });
+      closePopovers();
+    });
+    addGearItem('<span>Open in terminal</span><span class="popover-external">↗</span>', () => {
+      vscode.postMessage({ type: "runMcpList" });
+    });
+    addGearItem('<span>Open global config</span><span class="popover-external">↗</span>', () => {
+      vscode.postMessage({ type: "openGlobalConfig" });
+    });
   }
 
   function openModePopover() {
@@ -5499,6 +5637,22 @@
         state.steerSupported = false;
         state.steerByDefault = false;
         renderQueuedBlocks();
+        break;
+      case "mcpState": {
+        state.mcp = {
+          servers: Array.isArray(msg.servers) ? msg.servers : [],
+          loading: !!msg.loading,
+          error: msg.error || null,
+          healthy: msg.healthy || 0,
+          failing: msg.failing || 0,
+          unknown: msg.unknown || 0,
+          notice: msg.notice || null,
+        };
+        if (state.gearView === "mcp" && !gearPopover.hidden) renderMcpPanel();
+        break;
+      }
+      case "openMcpPanel":
+        openMcpPanel();
         break;
       case "usage":
         // Billing split (#53). `turn` is absent on a restore (we only stored the

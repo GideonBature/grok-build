@@ -96,6 +96,19 @@ import {
   type WorktreeApplyMode,
   type WorktreeListRow,
 } from "./worktree";
+import {
+  buildMcpAddArgs,
+  buildMcpRemoveArgs,
+  doctorNeedsAuth,
+  mcpHealthCounts,
+  mcpPresetById,
+  mergeMcpState,
+  parseMcpDoctorJson,
+  parseMcpListJson,
+  type McpPresetId,
+  type McpScope,
+  type McpServerUi,
+} from "./mcp";
 
 // HostMsg (host -> webview) and WebviewMsg (webview -> host) both live in
 // src/protocol.ts now — the single source of truth for the message contract,
@@ -397,6 +410,13 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
   /** Command Palette / gear: list worktrees and apply / remove / open. */
   manageWorktrees(): void {
     void this.manageWorktreesUi();
+  }
+
+  /** Command Palette: open the gear MCP manager panel in the chat webview. */
+  openMcpPanel(): void {
+    this.revealAndFocusComposer();
+    this.post({ type: "openMcpPanel" });
+    void this.refreshMcpState({ doctor: true });
   }
 
   /** Command Palette / gear: fork this conversation into a new git worktree. */
@@ -2469,23 +2489,23 @@ See design doc for the full state machine diagram.`;
         break;
       }
       case "runMcpList": {
-        // Run grok as the terminal's own process (shellPath/shellArgs) rather than
-        // typing a quoted path into the user's shell. On Windows the default
-        // terminal is PowerShell, which parses `"C:\…\grok.exe" mcp list` as a
-        // string literal and errors "Unexpected token". Launching the binary
-        // directly sidesteps shell quoting entirely and behaves the same on
-        // PowerShell, cmd, and POSIX shells.
-        const mcpCli = this.cliPath || locateGrokCli(
-          vscode.workspace.getConfiguration("grok").get<string>("cliPath", ""),
-        );
-        const mcpCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const term = mcpCli
-          ? vscode.window.createTerminal({ name: "Grok MCP", shellPath: mcpCli, shellArgs: ["mcp", "list"], cwd: mcpCwd })
-          : vscode.window.createTerminal("Grok MCP");
-        term.show();
-        if (!mcpCli) term.sendText("grok mcp list");
+        // Legacy: open a terminal with `grok mcp list`. The gear now opens the
+        // in-panel MCP manager; this remains as "Open in terminal" fallback.
+        this.openMcpTerminal(["mcp", "list"]);
         break;
       }
+      case "mcpRefresh":
+        await this.refreshMcpState({ doctor: msg.doctor !== false });
+        break;
+      case "mcpAddPreset":
+        await this.mcpAddPreset(msg.presetId, msg.scope || "user");
+        break;
+      case "mcpRemove":
+        await this.mcpRemoveServer(msg.name, msg.scope);
+        break;
+      case "mcpApplyRestart":
+        await this.mcpApplyRestart();
+        break;
       case "showLogs":
         this.output.show();
         break;
@@ -4983,6 +5003,237 @@ See design doc for the full state machine diagram.`;
       }
     } catch { /* no .env — fine */ }
     return dotEnv;
+  }
+
+  // ---------- MCP manager (gear panel + Command Palette) ----------
+
+  private resolveCliPath(): string | undefined {
+    return (
+      this.cliPath ||
+      locateGrokCli(vscode.workspace.getConfiguration("grok").get<string>("cliPath", "")) ||
+      undefined
+    );
+  }
+
+  private openMcpTerminal(shellArgs: string[]): void {
+    const mcpCli = this.resolveCliPath();
+    const mcpCwd = this.workspaceCwd();
+    const term = mcpCli
+      ? vscode.window.createTerminal({ name: "Grok MCP", shellPath: mcpCli, shellArgs, cwd: mcpCwd })
+      : vscode.window.createTerminal("Grok MCP");
+    term.show();
+    if (!mcpCli) term.sendText(["grok", ...shellArgs].join(" "));
+  }
+
+  private async runMcpCli(
+    subArgs: string[],
+    opts?: { timeoutMs?: number },
+  ): Promise<{ stdout: string; stderr: string; code: number }> {
+    const cli = this.resolveCliPath();
+    if (!cli) throw new Error("Grok CLI not found. Install it, then retry.");
+    const cwd = this.workspaceCwd();
+    try {
+      const { stdout, stderr } = await execFileAsync(cli, ["mcp", ...subArgs], {
+        cwd,
+        timeout: opts?.timeoutMs ?? 90_000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: this.buildEnv(cwd),
+      });
+      return { stdout: stdout ?? "", stderr: stderr ?? "", code: 0 };
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException & {
+        stdout?: string;
+        stderr?: string;
+        code?: number | string;
+      };
+      // execFile rejects on non-zero exit but still carries stdout (doctor/list).
+      if (typeof err.stdout === "string" || typeof err.stderr === "string") {
+        return {
+          stdout: err.stdout ?? "",
+          stderr: err.stderr ?? err.message ?? "",
+          code: typeof err.code === "number" ? err.code : 1,
+        };
+      }
+      throw e;
+    }
+  }
+
+  private postMcpState(partial: {
+    servers?: McpServerUi[];
+    loading?: boolean;
+    error?: string;
+    notice?: string;
+  }): void {
+    const servers = partial.servers ?? [];
+    const counts = mcpHealthCounts(servers);
+    this.post({
+      type: "mcpState",
+      servers,
+      loading: partial.loading,
+      error: partial.error,
+      notice: partial.notice,
+      healthy: counts.healthy,
+      failing: counts.failing,
+      unknown: counts.unknown,
+    });
+  }
+
+  /** List configured servers and optionally run doctor for health. */
+  private async refreshMcpState(opts?: { doctor?: boolean; notice?: string }): Promise<void> {
+    this.postMcpState({ servers: [], loading: true });
+    try {
+      const listOut = await this.runMcpCli(["list", "--json"], { timeoutMs: 30_000 });
+      if (listOut.code !== 0 && !listOut.stdout.trim()) {
+        throw new Error(listOut.stderr.trim() || `grok mcp list failed (exit ${listOut.code})`);
+      }
+      const listed = parseMcpListJson(listOut.stdout || "[]");
+      let doctor = null as ReturnType<typeof parseMcpDoctorJson> | null;
+      if (opts?.doctor !== false && listed.length > 0) {
+        const docOut = await this.runMcpCli(["doctor", "--json"], { timeoutMs: 120_000 });
+        try {
+          doctor = parseMcpDoctorJson(docOut.stdout || docOut.stderr || "{}");
+        } catch (e) {
+          this.output.appendLine(`[mcp] doctor parse failed: ${(e as Error).message}`);
+        }
+      }
+      const servers = mergeMcpState(listed, doctor);
+      const needsAuth = servers.some((s) => s.healthy === false && doctorNeedsAuth(s.detail));
+      const notice =
+        opts?.notice ||
+        (needsAuth
+          ? "Some servers need sign-in (OAuth). Use the tool once in chat, or run doctor in a terminal after authorizing."
+          : undefined);
+      this.postMcpState({ servers, loading: false, notice });
+    } catch (e) {
+      this.output.appendLine(`[mcp] refresh failed: ${(e as Error).message}`);
+      this.postMcpState({
+        servers: [],
+        loading: false,
+        error: (e as Error).message,
+      });
+    }
+  }
+
+  private async mcpAddPreset(presetId: string, scope: McpScope): Promise<void> {
+    const preset = mcpPresetById(presetId);
+    if (!preset) {
+      this.postMcpState({ servers: [], loading: false, error: `Unknown preset: ${presetId}` });
+      return;
+    }
+
+    let token: string | undefined;
+    let host: string | undefined;
+
+    if (preset.tokenEnv) {
+      // Prefer workspace/.env or process env when already set, else prompt.
+      const cwd = this.workspaceCwd();
+      const fromEnv =
+        this.buildEnv(cwd)[preset.tokenEnv] ||
+        process.env[preset.tokenEnv] ||
+        "";
+      if (fromEnv.trim()) {
+        token = fromEnv.trim();
+      } else {
+        const entered = await vscode.window.showInputBox({
+          title: `Connect ${preset.label}`,
+          prompt: preset.tokenPrompt || `Enter ${preset.tokenEnv}`,
+          password: true,
+          placeHolder: preset.tokenPlaceholder,
+          ignoreFocusOut: true,
+        });
+        if (entered === undefined) return; // cancelled
+        token = entered.trim();
+        if (!token) {
+          void vscode.window.showWarningMessage(`${preset.label}: token is required.`);
+          return;
+        }
+      }
+    }
+
+    if (preset.hostPrompt) {
+      const entered = await vscode.window.showInputBox({
+        title: `Connect ${preset.label}`,
+        prompt: preset.hostPrompt,
+        value: preset.hostDefault || "https://gitlab.com",
+        ignoreFocusOut: true,
+      });
+      if (entered === undefined) return;
+      host = entered.trim() || preset.hostDefault;
+    }
+
+    // Scope picker when default user — keep simple: webview passes scope; optional confirm for project.
+    if (scope === "project") {
+      const ok = await vscode.window.showWarningMessage(
+        `Add ${preset.label} to this workspace’s .grok/config.toml? (Shareable with the team — don’t commit secrets.)`,
+        "Add to project",
+        "Cancel",
+      );
+      if (ok !== "Add to project") return;
+    }
+
+    this.postMcpState({ servers: [], loading: true, notice: `Adding ${preset.label}…` });
+    try {
+      const addArgs = buildMcpAddArgs(presetId as McpPresetId, { scope, token, host });
+      const out = await this.runMcpCli(["add", ...addArgs], { timeoutMs: 60_000 });
+      if (out.code !== 0) {
+        const err = (out.stderr || out.stdout || `exit ${out.code}`).trim();
+        throw new Error(err || `grok mcp add failed`);
+      }
+      this.output.appendLine(`[mcp] added ${preset.name} (${scope})`);
+      await this.refreshMcpState({
+        doctor: true,
+        notice: `${preset.label} added. Restart this session so the agent loads it.`,
+      });
+      void vscode.window.showInformationMessage(
+        `${preset.label} MCP connected. Restart the session to use it in this chat.`,
+        "Restart session",
+      ).then((choice) => {
+        if (choice === "Restart session") void this.mcpApplyRestart();
+      });
+    } catch (e) {
+      this.output.appendLine(`[mcp] add failed: ${(e as Error).message}`);
+      await this.refreshMcpState({ doctor: true, notice: (e as Error).message });
+    }
+  }
+
+  private async mcpRemoveServer(name: string, scope?: McpScope): Promise<void> {
+    const confirm = await vscode.window.showWarningMessage(
+      `Remove MCP server “${name}”?`,
+      { modal: true },
+      "Remove",
+    );
+    if (confirm !== "Remove") return;
+    this.postMcpState({ servers: [], loading: true, notice: `Removing ${name}…` });
+    try {
+      const args = buildMcpRemoveArgs(name, scope);
+      const out = await this.runMcpCli(["remove", ...args], { timeoutMs: 30_000 });
+      if (out.code !== 0) {
+        throw new Error((out.stderr || out.stdout || `exit ${out.code}`).trim());
+      }
+      await this.refreshMcpState({
+        doctor: true,
+        notice: `Removed ${name}. Restart the session if it was already loaded.`,
+      });
+    } catch (e) {
+      await this.refreshMcpState({ doctor: true, notice: (e as Error).message });
+    }
+  }
+
+  private async mcpApplyRestart(): Promise<void> {
+    const session = this.focused;
+    // Primer-only / empty: transparent restart, no dialog.
+    if (!session.hasHistory) {
+      this.emit(session, { type: "clearMessages" });
+      await this.startSession();
+      void vscode.window.showInformationMessage("Session restarted — MCP servers reloaded.");
+      return;
+    }
+    const mode = await this.pickRestartMode(
+      "Reload MCP servers into this chat? Restarts the session so the CLI re-reads config.",
+    );
+    if (!mode) return;
+    await this.restartSession(mode);
+    void vscode.window.showInformationMessage("Session restarted — MCP servers reloaded.");
   }
 
   private buildEnv(cwd: string): NodeJS.ProcessEnv {

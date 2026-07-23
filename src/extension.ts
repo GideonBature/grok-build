@@ -17,6 +17,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("grok.newSession", () => sidebar.newSession()),
     vscode.commands.registerCommand("grok.newWorktreeSession", () => sidebar.newWorktreeSession()),
     vscode.commands.registerCommand("grok.manageWorktrees", () => sidebar.manageWorktrees()),
+    vscode.commands.registerCommand("grok.manageMcp", () => sidebar.openMcpPanel()),
     vscode.commands.registerCommand("grok.forkIntoWorktree", () => sidebar.forkIntoWorktree()),
     vscode.commands.registerCommand("grok.applyFocusedWorktree", () => sidebar.applyFocusedWorktree()),
     vscode.commands.registerCommand("grok.compact", () => {

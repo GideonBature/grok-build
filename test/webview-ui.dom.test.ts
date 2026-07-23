@@ -963,6 +963,48 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
     click(h.window, itemByText(h.doc, "Show extension logs"));
     expect(types(h.posted)).toContain("showLogs");
   });
+
+  it("MCP servers opens an in-panel manager and posts mcpRefresh", () => {
+    const h = boot();
+    click(h.window, $(h.doc, "gear-btn"));
+    click(h.window, itemByText(h.doc, "Config & debug"));
+    click(h.window, itemByText(h.doc, "MCP servers"));
+
+    expect(types(h.posted)).toContain("mcpRefresh");
+    const labels = items(h.doc).map((el) => el.textContent || "");
+    expect(labels.some((l) => l.includes("← MCP servers"))).toBe(true);
+    expect(labels.some((l) => l.includes("Figma"))).toBe(true);
+    expect(labels.some((l) => l.includes("GitHub"))).toBe(true);
+    expect(labels.some((l) => l.includes("GitLab"))).toBe(true);
+    expect(labels.some((l) => l.includes("Apply to this session"))).toBe(true);
+
+    click(h.window, itemByText(h.doc, "GitHub"));
+    expect(h.posted.some((m) => m.type === "mcpAddPreset" && m.presetId === "github")).toBe(true);
+
+    // Host snapshot re-renders rows while the panel stays open.
+    dispatch(h.window, {
+      type: "mcpState",
+      servers: [
+        {
+          name: "figma",
+          scope: "user",
+          enabled: true,
+          transport: "http",
+          target: "https://mcp.figma.com/mcp",
+          healthy: false,
+          statusLabel: "Needs attention",
+          detail: "OAuth authorization required",
+        },
+      ],
+      loading: false,
+      healthy: 0,
+      failing: 1,
+      unknown: 0,
+    });
+    const after = (h.doc.querySelector("#gear-popover")?.textContent || "");
+    expect(after).toContain("figma");
+    expect(after).toContain("Needs attention");
+  });
 });
 
 describe("Auto accept mode label (#25 rename)", () => {

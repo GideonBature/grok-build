@@ -23,6 +23,7 @@
 
 import type { ModelInfo, PromptResultMeta, PromptUsage, PermissionRequest, ExitPlanRequest, QuestionRequest } from "./acp";
 import type { FileChip } from "./chips";
+import type { McpServerUi } from "./mcp";
 import type { SessionListEntry } from "./sessions";
 import type { Dot } from "./session-pool";
 
@@ -141,7 +142,21 @@ export type HostMsg =
   // Session-cumulative billing (#53), summed by the host across the session's
   // turns. `turn` is the last prompt's own usage. Both omitted when the CLI sent
   // no `_meta.usage` — the popover then shows only the context row, never zeros.
-  | { type: "usage"; turn?: PromptUsage; session?: PromptUsage };
+  | { type: "usage"; turn?: PromptUsage; session?: PromptUsage }
+  // MCP manager panel (gear → MCP servers). Host runs `grok mcp list|doctor` and
+  // posts a merged snapshot. Ephemeral UI (via `post`, not session-buffered).
+  | {
+      type: "mcpState";
+      servers: McpServerUi[];
+      loading?: boolean;
+      error?: string;
+      healthy?: number;
+      failing?: number;
+      unknown?: number;
+      notice?: string;
+    }
+  // Open the gear popover on the MCP panel (Command Palette / host-driven).
+  | { type: "openMcpPanel" };
 
 /** webview -> host */
 export type WebviewMsg =
@@ -161,6 +176,12 @@ export type WebviewMsg =
   | { type: "openGlobalConfig" }
   | { type: "openProjectConfig" }
   | { type: "runMcpList" }
+  // MCP manager: list/doctor refresh, add a preset, remove a server, restart so
+  // the live session reloads MCP config.
+  | { type: "mcpRefresh"; doctor?: boolean }
+  | { type: "mcpAddPreset"; presetId: "figma" | "github" | "gitlab"; scope?: "user" | "project" }
+  | { type: "mcpRemove"; name: string; scope?: "user" | "project" }
+  | { type: "mcpApplyRestart" }
   | { type: "showLogs" }
   | { type: "moveView"; location: "panel" | "sidebar" | "auxiliarybar" }
   | { type: "setShowThinking"; value: boolean }
@@ -224,14 +245,15 @@ const HOST_MESSAGE_TYPE_MAP: Record<HostMsg["type"], true> = {
   sessionContext: true, clearMessages: true, onboarding: true, error: true,
   xaiNotification: true, subagentUpdate: true, commandOutput: true, expandCommandOutputs: true, steerByDefault: true,
   setAllToolDetails: true, focusInput: true, sessions: true, sessionDot: true, queuedSends: true,
-  steerUnavailable: true, usage: true,
+  steerUnavailable: true, usage: true, mcpState: true, openMcpPanel: true,
 };
 
 const WEBVIEW_MESSAGE_TYPE_MAP: Record<WebviewMsg["type"], true> = {
   ready: true, send: true, newSession: true, cancel: true, pickModel: true,
   setMode: true, removeChip: true, toggleChip: true, openFile: true, openUrl: true,
   openDiff: true, exportExpr: true, setEffort: true, openGlobalConfig: true,
-  openProjectConfig: true, runMcpList: true, showLogs: true, moveView: true,
+  openProjectConfig: true, runMcpList: true, mcpRefresh: true, mcpAddPreset: true,
+  mcpRemove: true, mcpApplyRestart: true, showLogs: true, moveView: true,
   setShowThinking: true, setExpandCommandOutputs: true, setSteerByDefault: true,
   dropFile: true, permissionAnswer: true, exitPlanAnswer: true, questionAnswer: true,
   questionCancel: true, setModel: true, runInstallCmd: true, runGrokLogin: true,

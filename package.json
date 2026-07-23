@@ -92,6 +92,10 @@
         "title": "Grok: Manage Worktrees"
       },
       {
+        "command": "grok.manageMcp",
+        "title": "Grok: Manage MCP Servers"
+      },
+      {
         "command": "grok.forkIntoWorktree",
         "title": "Grok: Fork Conversation into Worktree"
       },

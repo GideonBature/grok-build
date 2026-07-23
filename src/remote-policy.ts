@@ -81,6 +81,11 @@ export const INBOUND_DISPOSITION: Record<WebviewMsg["type"], InboundDisposition>
   openGlobalConfig: "host-local",
   openProjectConfig: "host-local",
   runMcpList: "host-local",
+  // MCP manager mutates host CLI config + may restart the local session.
+  mcpRefresh: "host-local",
+  mcpAddPreset: "host-local",
+  mcpRemove: "host-local",
+  mcpApplyRestart: "host-local",
   showLogs: "host-local",
   moveView: "host-local",
   dropFile: "host-local",
@@ -186,6 +191,8 @@ export const OUTBOUND_DISPOSITION: Record<HostMsg["type"], OutboundDisposition> 
   queuedSends: "mirror",
   steerUnavailable: "mirror",
   usage: "mirror",
+  mcpState: "mirror",
+  openMcpPanel: "host-local",
 };
 
 // ---------- media inlining ----------

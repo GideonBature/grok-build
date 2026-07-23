@@ -24,11 +24,13 @@
     "promptComplete", "contextUsage", "commandOutput", "expandCommandOutputs", "setAllToolDetails", "focusInput", "agentReset", "agentError", "agentEnd", "exit", "setBusy", "summarizing",
     "sessionContext", "clearMessages", "onboarding", "error", "xaiNotification", "subagentUpdate", "sessions",
     "sessionDot", "queuedSends", "steerUnavailable", "usage", "steerByDefault",
+    "mcpState", "openMcpPanel",
   ];
   const WEBVIEW_MESSAGE_TYPES = [
     "ready", "send", "newSession", "cancel", "pickModel", "setMode", "removeChip",
     "toggleChip", "openFile", "openUrl", "openDiff", "exportExpr", "setEffort",
-    "openGlobalConfig", "openProjectConfig", "runMcpList", "showLogs", "moveView",
+    "openGlobalConfig", "openProjectConfig", "runMcpList", "mcpRefresh", "mcpAddPreset",
+    "mcpRemove", "mcpApplyRestart", "showLogs", "moveView",
     "setShowThinking", "setExpandCommandOutputs",
     "dropFile", "permissionAnswer", "exitPlanAnswer", "questionAnswer", "questionCancel",
     "setModel", "runInstallCmd", "runGrokLogin", "logout", "checkGrokUpdate", "updateGrok",
