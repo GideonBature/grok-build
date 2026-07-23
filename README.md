@@ -18,7 +18,7 @@ No manual setup: the extension **walks you through installing the `grok` CLI and
 
 ## Why use this?
 
-If you live in your editor, this puts Grok Build right next to your code — a graphical workflow on top of the CLI: the **native diff editor** on every proposed edit, your **open files and selection as context**, **parallel sessions** with status dots, **resumable history**, **inline images & video**, and **voice dictation**. The CLI does the heavy lifting; this is the GUI for when you'd rather not be in a terminal.
+If you live in your editor, this puts Grok Build right next to your code — a graphical workflow on top of the CLI: the **native diff editor** on every proposed edit, your **open files and selection as context**, **parallel sessions** with status dots, **resumable history**, **worktree sessions**, **MCP servers**, **inline images & video**, and **voice dictation**. The CLI does the heavy lifting; this is the GUI for when you'd rather not be in a terminal.
 
 ### Features & capabilities
 
@@ -27,7 +27,7 @@ _Click any feature to expand._
 <details>
 <summary><strong>Permission cards with diff preview</strong> — see every edit in VS Code's native diff before you approve</summary>
 
-When Grok proposes an edit, the permission card shows a **Codex-style inline diff** (green/red lines + `+N −M`) right in chat — and **open full diff →** opens VS Code's native side-by-side editor. Then *Allow once / always* or *Reject*. The file is written only **after** you approve.
+When Grok proposes an edit, the permission card shows a **Keep / Undo** proposal in chat — a green block of the change (line-by-line when something was removed) with **Keep** / **Undo** top-right, Cursor-style. **open full diff →** opens VS Code's native side-by-side editor only if you want it. The file is written only **after** you Keep.
 
 ![Permission card with a native VS Code diff preview before approval](docs/screenshots/permission_diff.png)
 
@@ -120,9 +120,16 @@ Gear → *Fork conversation* copies the conversation into a **new session** name
 <details>
 <summary><strong>Worktree sessions</strong> — parallel work on an isolated git checkout</summary>
 
-**`Grok: New Worktree Session`** (Command Palette or gear → Session) creates a Grok-managed git worktree (optional name + base ref) and opens a **new agent session rooted there**. Edits land under `~/.grok/worktrees/…`, not your main tree.
+**`Grok: New Worktree Session`** (Command Palette, gear → Session, or the **+** / **`@`** menu) creates a Grok-managed git worktree (optional name + base ref) and opens a **new agent session rooted there**. Edits land under `~/.grok/worktrees/…`, not your main tree.
 
 **`Grok: Fork Conversation into Worktree`** copies the current chat into a **new worktree session** — conversation branched *and* code isolated. **`Grok: Manage Worktrees`** lists worktrees and can **Apply to workspace** (preview differing files, multi-select, then ship), open the folder, start a session there, or **remove** the worktree. **`Grok: Apply This Worktree to Workspace`** does the same for the focused worktree session. History rows show a `Worktree · <label>` badge; deleting such a session can also remove the worktree.
+
+</details>
+
+<details>
+<summary><strong>MCP servers</strong> — connect Figma, GitHub, GitLab (and more) from the sidebar</summary>
+
+Gear → **Config & debug** → **MCP servers** (or Command Palette **`Grok: Manage MCP Servers`**) lists the servers the CLI already knows, shows health status, and lets you **connect presets** (Figma / GitHub / GitLab), **remove** a server, **refresh** status, or **Apply to this session** (restarts the live agent so it picks up the new config). The CLI still owns the config on disk (`grok mcp *`); this is the GUI for it.
 
 </details>
 
@@ -147,7 +154,7 @@ When Grok delegates work to a subagent, the chat shows a card with the task and 
 <details>
 <summary><strong>Tool calls</strong> — every read, edit & command inline; expand for full details</summary>
 
-Every action appears as a category-iconed row, batched and summarized ("Explored 5 items", "Edited 2 files"); a failed tool turns red with the reason. Edits show a `+N −M` change count and expand to an inline diff at the file's real line numbers; shell commands expand to an **IN/OUT block** with the full command and its complete output — exactly what Grok received, exit code included. To audit an Auto-accept run, pre-expand everything with `grok.expandCommandOutputs`, or **Grok: Expand All Tool Details** from the Command Palette.
+Every action appears as a category-iconed row, batched and summarized ("Explored 5 items", "Edited 2 files"); a failed tool turns red with the reason. While Grok works, the chat always shows **live progress** — *Reading…* / *Editing…* on the current tool batch, *Thinking…* while it reasons, or the spinning **Grokking** stand-in between steps — so a long read/edit stretch never looks hung. Edits open as a **Keep / Undo** proposal (green block + `+N −M`); **Undo** reverses an already-applied Auto-accept write. Shell commands expand to an **IN/OUT block** with the full command and its complete output — exactly what Grok received, exit code included. To audit an Auto-accept run, pre-expand everything with `grok.expandCommandOutputs`, or **Grok: Expand All Tool Details** from the Command Palette.
 
 ![A tool batch with a command expanded to its IN/OUT block](docs/screenshots/tool_calls.png)
 
@@ -213,9 +220,9 @@ Grok opens in the **Secondary Side Bar** (right side, next to other AI tools). P
 ## Quick start
 
 1. **Open** the Grok view (`Ctrl/Cmd+;`, or **Grok: Open** from the command palette) — it lives in the Secondary Side Bar by default.
-2. **Type a prompt** and press **Enter**. Grok streams its answer, showing a *Thinking…* line while it reasons. Want the full reasoning inline? Turn on **Show thinking traces** in the gear menu → *Config & debug*.
-3. **Approve actions.** When Grok wants to write a file or run a command it may raise a permission card — preview an edit in the native **diff editor**, then *Allow once / always / Reject*.
-4. **Pick your mode** (Agent / Plan / Auto accept), **model**, and **reasoning effort** from the bottom toolbar and gear menu.
+2. **Type a prompt** and press **Enter**. Grok streams its answer with live progress (*Grokking* → *Thinking…* → *Reading…* / *Editing…* as it works). Want the full reasoning inline? Turn on **Show thinking traces** in the gear menu → *Config & debug*.
+3. **Approve actions.** When Grok wants to write a file it may raise a **Keep / Undo** proposal in chat (green block + buttons); for commands you still get Allow / Reject. **open full diff →** opens the native side-by-side editor on demand.
+4. **Pick your mode** (Agent / Plan / Auto accept), **model**, and **reasoning effort** from the bottom toolbar and gear menu. Attach context with **`@`** / **`#`**, the **+** button, or drag-drop.
 5. **Resume anytime** — the clock icon lists past sessions for this project.
 
 ---
@@ -233,6 +240,8 @@ Grok opens in the **Secondary Side Bar** (right side, next to other AI tools). P
 | `grok.defaultMode` | `""` | Mode for new sessions, remembered automatically from your last Agent / Auto accept switch (Plan is never remembered). Empty = Agent. |
 | `grok.includeActiveFileByDefault` | `true` | Auto-add the active editor as a context chip. |
 | `grok.useCtrlEnterToSend` | `false` | When true, Enter inserts a newline and Ctrl/Cmd+Enter sends. |
+| `grok.terminalShell` | `"auto"` | **Windows only.** Which shell runs the agent's commands: `auto` = PowerShell (`pwsh` → Windows PowerShell 5.1), matching the standalone CLI; `cmd` forces `cmd.exe`. Install PowerShell 7 for full `&&` / exit-code parity. No effect on macOS/Linux. |
+| `grok.remoteControl.relayUrl` | `""` | **Experimental.** `ws(s)://` URL of a remote relay; pair with **Grok: Link Remote Device**. Empty = off (nothing dials out). |
 | `grok.showThinking` | `false` | Show Grok's reasoning (thinking) traces in chat. Off shows a *Thinking…* stand-in. Also toggleable live from gear → Config & debug. |
 | `grok.expandCommandOutputs` | `false` | Expand tool details by default — each shell command's IN/OUT block and each edit's inline diff (useful for auditing Auto-accept sessions). Tool groups still collapse by default. Toggle live from gear → Config & debug → **Expand tool details**. (Setting key kept for compatibility.) |
 | `grok.steerByDefault` | `false` | Send straight into Grok's running turn instead of queueing. Off: a message sent mid-turn waits and flushes when the turn ends (steer it on demand with the **Steer** button). On: it skips the queue and redirects Grok immediately. Never cancels the turn or discards work in progress; plain text only (no chips, editor context, or `/commands`). Toggle live from gear → Config & debug → **Steer by default**. |
@@ -263,6 +272,7 @@ VS Code commands (not Grok slash commands):
 | `Grok: Manage Worktrees` | List worktrees; apply to workspace, open, or remove |
 | `Grok: Fork Conversation into Worktree` | Fork the chat into a new isolated git worktree session |
 | `Grok: Apply This Worktree to Workspace` | Preview + ship the focused worktree's files into the main tree |
+| `Grok: Manage MCP Servers` | Open the MCP panel (list / connect presets / remove / apply) |
 | `Grok: Compact Conversation` | Compact the current session to reclaim context |
 | `Grok: Pick Model` | Open the model picker |
 | `Grok: Toggle Plan / Agent Mode` | Open the mode picker (Agent / Plan / Auto accept) |
@@ -273,6 +283,7 @@ VS Code commands (not Grok slash commands):
 | `Grok: Collapse All Tool Details (This Session)` | Collapse them all, and keep new ones collapsed — this session only |
 | `Grok: Show Logs` | Open the Grok output channel (ACP messages, errors) |
 | `Grok: Log Out` | Sign out of the Grok CLI (`grok logout`) and return to the sign-in screen |
+| `Grok: Link Remote Device` / `Unlink…` | **Experimental.** Pair / unpair a remote client when `grok.remoteControl.relayUrl` is set |
 
 | Key | Action |
 |---|---|
@@ -318,6 +329,8 @@ npm run package  # → grok-vscode-phuryn-<version>.vsix
 
 - **Diff preview semantics.** The diff editor compares the proposed old vs. new text against each other, not against the file on disk at preview time; the write happens only after approval.
 - **Worktree apply is host-assisted.** The CLI’s `apply` RPC is called, but differing files are also shipped host-side (`shipWorktreeFiles`) because CoW worktrees don’t always merge into the source tree on `apply` alone (see `research/worktree.md`).
+- **Command IN/OUT is live-session only.** Shell output is captured while the process is running; it is not replayed from disk when you reopen an old session.
+- **Remote Control is experimental and opt-in.** Nothing dials out unless you set `grok.remoteControl.relayUrl` and run **Link Remote Device**. Full phone/browser remote control still depends on upstream/xAI platform work.
 - **View placement.** The view defaults to the **Secondary Side Bar** (requires VS Code 1.106+, the extension's engine floor). Relocate it anytime via gear → **Config & debug** → **Move view** (one click: Panel / Primary Side Bar / Secondary Side Bar) — useful in Cursor, whose side-bar context menu hides the built-in "Move To" entry.
 
 ---
@@ -333,3 +346,7 @@ More: [docs/privacy.md](docs/privacy.md).
 ## License & attribution
 
 Licensed under the **MIT License** — see [LICENSE](LICENSE). MIT is permissive (use, modify, sell, even in closed-source products) but **not** obligation-free: the copyright notice and license text must travel with **all copies, including compiled builds**. If you're reusing this project, see [docs/attribution.md](docs/attribution.md) for what that means and how to credit it properly.
+
+---
+
+*Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.*

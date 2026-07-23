@@ -43,8 +43,12 @@ describe("single-edit tool group stays expandable + reviewable (#30, #45)", () =
     expect(header.textContent).toContain("Edited 1 file");
     expect(header.querySelector(".diff-stat-add")!.textContent).toBe("+2");
 
-    // The inline diff itself (Codex-style gutter rows) lives in the row's detail.
-    const diffBlock = item.querySelector(".tool-item-details .tool-diff-region") as HTMLElement;
+    // Cursor-style Keep/Undo proposal wraps the change (mixed replace → line gutters).
+    const proposal = item.querySelector(".tool-item-details .edit-proposal") as HTMLElement;
+    expect(proposal).not.toBeNull();
+    expect(proposal.querySelector(".edit-proposal-keep")!.textContent).toBe("Keep");
+    expect(proposal.querySelector(".edit-proposal-undo")!.textContent).toBe("Undo");
+    const diffBlock = proposal.querySelector(".tool-diff-region") as HTMLElement;
     expect(diffBlock).not.toBeNull();
     const adds = [...diffBlock.querySelectorAll(".tdl-add .tdl-code")].map((s) => s.textContent);
     const dels = [...diffBlock.querySelectorAll(".tdl-del .tdl-code")].map((s) => s.textContent);
@@ -55,13 +59,22 @@ describe("single-edit tool group stays expandable + reviewable (#30, #45)", () =
     expect(diffBlock.querySelector(".tdl-del .tdl-sign")!.textContent).toBe("-");
     expect([...diffBlock.querySelectorAll(".tdl .tdl-num")].map((s) => s.textContent)).toEqual(["1", "2", "2", "3"]);
 
-    // "open diff →" still opens the native editor with the region.
+    // "open full diff →" still opens the native editor with the region (on demand).
     const link = group!.querySelector(".tool-group-body .preview-link") as HTMLButtonElement;
-    expect(link.textContent).toContain("open diff");
+    expect(link.textContent).toContain("open full diff");
     click(window, link);
     const openDiffs = posted.filter((m: any) => m.type === "openDiff");
     expect(openDiffs).toHaveLength(1);
     expect(openDiffs[0]).toMatchObject({ path: "src/foo.ts", oldText: "a\nb", newText: "a\nB\nc" });
+
+    // Undo on an applied edit posts undoEdit (reverse on disk).
+    click(window, proposal.querySelector(".edit-proposal-undo") as HTMLElement);
+    expect(posted.filter((m: any) => m.type === "undoEdit")).toHaveLength(1);
+    expect(posted.find((m: any) => m.type === "undoEdit")).toMatchObject({
+      path: "src/foo.ts",
+      oldText: "a\nb",
+      newText: "a\nB\nc",
+    });
   });
 
   it("edit diffs open by default (Codex-style); the row can still collapse", () => {
@@ -111,7 +124,8 @@ describe("single-edit tool group stays expandable + reviewable (#30, #45)", () =
 
     const item = doc.querySelector(".tool-item") as HTMLElement;
     expect(item.querySelectorAll(".tool-item-details")).toHaveLength(1);
-    expect(item.querySelectorAll(".diff-stat")).toHaveLength(1);
+    // Row-level +N −M only (proposal bar also has a stat — don't count nested).
+    expect(item.querySelectorAll(":scope > .diff-stat")).toHaveLength(1);
   });
 
   it("a new file (empty oldText) reads as pure additions, no phantom removal", () => {
@@ -126,6 +140,11 @@ describe("single-edit tool group stays expandable + reviewable (#30, #45)", () =
     const item = doc.querySelector(".tool-item") as HTMLElement;
     expect(item.querySelector(".diff-stat-add")!.textContent).toBe("+2");
     expect(item.querySelector(".diff-stat-del")!.textContent).toBe("−0");
+    // Pure adds → soft green proposal body (Cursor Keep/Undo style), not gutters.
+    const soft = item.querySelector(".edit-proposal-soft") as HTMLElement;
+    expect(soft).not.toBeNull();
+    expect(soft.textContent).toBe("x\ny");
+    expect(item.querySelector(".tdl")).toBeNull();
   });
 
   it("pre-expands the diff when grok.expandCommandOutputs (Expand tool details) is on", () => {
@@ -175,10 +194,11 @@ describe("single-edit tool group stays expandable + reviewable (#30, #45)", () =
     expect(group).not.toBeNull();
     expect(doc.querySelector(".tool-flat")).toBeNull();
     expect(group!.querySelector(".diff-stat-add")!.textContent).toBe("+2");
+    expect(group!.querySelector(".tool-item-details .edit-proposal")).not.toBeNull();
     expect(group!.querySelector(".tool-item-details .tool-diff-region")).not.toBeNull();
 
     const link = group!.querySelector(".tool-group-body .preview-link") as HTMLButtonElement;
-    expect(link.textContent).toContain("open diff");
+    expect(link.textContent).toContain("open full diff");
     click(window, link);
     const openDiffs = posted.filter((m: any) => m.type === "openDiff");
     expect(openDiffs).toHaveLength(1);
@@ -277,7 +297,7 @@ describe("the authoritative completed diff corrects the optimistic echo (#45 fol
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "w1", status: "completed", content: [{ type: "diff", path: "config.json", oldText: OLD, newText: NEW }] } });
     expect(row().querySelector(".diff-stat-add")!.textContent).toBe("+4");
     expect(row().querySelector(".diff-stat-del")!.textContent).toBe("−3");
-    expect(row().querySelectorAll(".diff-stat")).toHaveLength(1); // replaced, not doubled
+    expect(row().querySelectorAll(":scope > .diff-stat")).toHaveLength(1); // replaced, not doubled
     // The group roll-up follows the correction rather than summing both renders.
     dispatch(window, { type: "promptComplete", meta: {} });
     const label = doc.querySelector(".tool-group-label")!;
@@ -313,7 +333,7 @@ describe("the authoritative completed diff corrects the optimistic echo (#45 fol
     expect((doc.querySelector(".tool-item-details") as HTMLElement).hidden).toBe(false);
 
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "tc1", content: [DIFF] } }); // replay
-    expect(item.querySelectorAll(".diff-stat")).toHaveLength(1);
+    expect(item.querySelectorAll(":scope > .diff-stat")).toHaveLength(1);
     expect(item.querySelectorAll(".tool-item-details")).toHaveLength(1);
     expect((doc.querySelector(".tool-item-details") as HTMLElement).hidden).toBe(false); // stays open
     dispatch(window, { type: "promptComplete", meta: {} });
@@ -646,7 +666,7 @@ describe("a replace_all renders one hunk per replaced site (_meta.details[])", (
     // 2) completed: details[] → 3 real hunks, +3 −3.
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "ra", status: "completed", content: [replaceAll(three)] } });
     expect(item().querySelector(".diff-stat-add")!.textContent).toBe("+3");
-    expect(item().querySelectorAll(".diff-stat")).toHaveLength(1); // replaced, not appended
+    expect(item().querySelectorAll(":scope > .diff-stat")).toHaveLength(1); // replaced, not appended
     expect(doc.querySelectorAll(".tdl-del")).toHaveLength(3);
     expect(doc.querySelectorAll(".tool-item-details")).toHaveLength(1);
     expect(doc.querySelectorAll(".tool-diff-region")).toHaveLength(1);
@@ -672,7 +692,7 @@ describe("a replace_all renders one hunk per replaced site (_meta.details[])", (
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "ra", status: "completed", content: [replaceAll(three)] } });
     expect(doc.querySelectorAll(".tool-diff-region")).toHaveLength(1);
     expect(doc.querySelectorAll(".tdl-del")).toHaveLength(3);
-    expect(doc.querySelector(".tool-item")!.querySelectorAll(".diff-stat")).toHaveLength(1);
+    expect(doc.querySelector(".tool-item")!.querySelectorAll(":scope > .diff-stat")).toHaveLength(1);
   });
 
   // MAX_INLINE_DIFF_LINES (400) is a budget ACROSS the block's hunks — 250 sites must

@@ -2092,25 +2092,129 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
 }
-/* Permission-card edit preview — same Codex-style rows as tool-item diffs, always
-   visible so you don't have to open the native editor just to see the change. */
-.card.permission .perm-diff-meta {
+/* Cursor-style Keep / Undo edit proposal — primary review surface for file
+   changes (permission cards + applied Auto-accept tool rows). Green block with
+   Keep/Undo top-right, not a raw line-numbered dump or forced native diff tab. */
+.edit-proposal {
+  position: relative;
+  border-radius: var(--chat-radius-code, 8px);
+  border: 1px solid color-mix(in srgb, var(--tdiff-add-line) 45%, var(--vscode-editorWidget-border));
+  background: var(--tdiff-add-bg, color-mix(in srgb, var(--tdiff-add-line) 15%, transparent));
+  overflow: hidden;
+  margin: 0 0 6px;
+}
+.edit-proposal.edit-proposal-del {
+  border-color: color-mix(in srgb, var(--tdiff-del-line) 45%, var(--vscode-editorWidget-border));
+  background: var(--tdiff-del-bg, color-mix(in srgb, var(--tdiff-del-line) 12%, transparent));
+}
+.edit-proposal-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 4px 10px;
+  flex-wrap: wrap;
+}
+.edit-proposal-meta {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1 1 auto;
   font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
 }
-.card.permission .perm-diff-path {
+.edit-proposal-path {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--vscode-foreground);
+  font-weight: 500;
 }
-.card.permission .perm-diff-region {
+.edit-proposal-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.edit-proposal-btn {
+  appearance: none;
+  border: 1px solid var(--vscode-button-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.3;
+}
+.edit-proposal-keep {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: transparent;
+  font-weight: 600;
+}
+.edit-proposal-keep:hover {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+.edit-proposal-undo {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+}
+.edit-proposal-undo:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+.edit-proposal-extra {
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+}
+.edit-proposal-extra:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--vscode-foreground);
+}
+.edit-proposal-settled {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+  padding: 0 4px;
+}
+.edit-proposal-body {
+  margin: 0 8px 8px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 6px;
+}
+.edit-proposal-soft {
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--tdiff-add-line) 18%, var(--vscode-editor-background, transparent));
+  color: var(--vscode-editor-foreground, var(--vscode-foreground));
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.95em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-left: 3px solid var(--tdiff-add-line);
+}
+.edit-proposal-diff .tool-diff-region {
   margin: 0;
-  /* A bit taller than tool-row diffs — this is the primary review surface. */
-  max-height: 360px;
+  max-height: 280px;
+  background: transparent;
+}
+.edit-proposal-footer {
+  padding: 0 10px 8px;
+}
+.edit-proposal-done {
+  opacity: 0.85;
+}
+.edit-proposal-done .edit-proposal-soft,
+.edit-proposal-done .edit-proposal-diff {
+  opacity: 0.9;
+}
+/* Permission cards that carry an edit proposal don't need the stacked option
+   list chrome — Keep/Undo live on the proposal bar. */
+.card.permission .edit-proposal {
+  margin: 0;
 }
 .card.permission .preview-link {
   align-self: flex-start;

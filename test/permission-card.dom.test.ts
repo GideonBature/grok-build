@@ -1,12 +1,12 @@
-// DOM-level test of the permission card's diff-preview UX (issue #21) — drives
+// DOM-level test of the permission card's Keep/Undo edit-proposal UX — drives
 // the REAL shipped media/chat.js in a happy-dom window. It seeds the edit diff
 // (via the toolCallUpdate the host posts), renders the permission card, and
 // asserts the webview now:
-//   - shows a Codex-style inline green/red diff on the card itself,
-//   - auto-opens the native side-by-side editor (posts `openDiff`) when the card appears,
-//   - carries the `requestId` on both `openDiff` and `permissionAnswer` so the
-//     host can pair the auto-opened tab with the answer and close it,
-//   - still offers a manual "open full diff →" button to re-open it.
+//   - shows a Cursor-style Keep / Undo proposal on the card itself,
+//   - does NOT auto-open the native side-by-side editor (that was the "always
+//     looks like a line dump" problem),
+//   - still offers a manual "open full diff →" button,
+//   - maps Keep → allow_once and Undo → reject_once with the right requestId.
 import { describe, it, expect } from "vitest";
 import { bootWebview, dispatch, click } from "./webview-harness";
 
@@ -23,45 +23,47 @@ function seedDiffAndCard(window: any, requestId: number | string = 7) {
       toolCall: { toolCallId: "tc1", kind: "edit", title: "Edit src/foo.ts" },
       options: [
         { optionId: "allow", name: "Allow once", kind: "allow_once" },
+        { optionId: "always", name: "Allow always", kind: "allow_always" },
         { optionId: "rej", name: "Reject", kind: "reject_once" },
       ],
     },
   });
 }
 
-describe("permission card diff preview (real chat.js in a DOM)", () => {
-  it("auto-opens the native diff and shows an inline Codex-style preview on the card", () => {
+describe("permission card Keep/Undo edit proposal (real chat.js in a DOM)", () => {
+  it("shows a Keep/Undo proposal and does not auto-open the native diff", () => {
     const { window, posted, doc } = bootWebview();
     seedDiffAndCard(window, 7);
 
     const card = doc.querySelector(".card.permission");
     expect(card).not.toBeNull();
-    expect(card!.querySelector(".card-subtitle")!.textContent).toContain("src/foo.ts");
-    // +2 −1 from "a\\nb" → "a\\nB\\nc" (same as the tool-row #45 surface).
-    expect(card!.querySelector(".diff-stat-add")!.textContent).toBe("+2");
-    expect(card!.querySelector(".diff-stat-del")!.textContent).toBe("−1");
+    const proposal = card!.querySelector(".edit-proposal") as HTMLElement;
+    expect(proposal).not.toBeNull();
+    expect(proposal.querySelector(".edit-proposal-path")!.textContent).toBe("src/foo.ts");
+    // +2 −1 from "a\\nb" → "a\\nB\\nc"
+    expect(proposal.querySelector(".diff-stat-add")!.textContent).toBe("+2");
+    expect(proposal.querySelector(".diff-stat-del")!.textContent).toBe("−1");
 
-    const region = card!.querySelector(".tool-diff-region.perm-diff-region") as HTMLElement;
-    expect(region).not.toBeNull();
-    const adds = [...region.querySelectorAll(".tdl-add .tdl-code")].map((s) => s.textContent);
-    const dels = [...region.querySelectorAll(".tdl-del .tdl-code")].map((s) => s.textContent);
-    expect(adds).toEqual(["B", "c"]);
+    const keep = proposal.querySelector(".edit-proposal-keep") as HTMLButtonElement;
+    const undo = proposal.querySelector(".edit-proposal-undo") as HTMLButtonElement;
+    expect(keep).not.toBeNull();
+    expect(undo).not.toBeNull();
+    expect(keep.textContent).toBe("Keep");
+    expect(undo.textContent).toBe("Undo");
+    // Allow always is the optional third action on the bar.
+    expect(proposal.querySelector(".edit-proposal-extra")!.textContent).toMatch(/Always/i);
+
+    // Mixed replace → line-by-line body (not the soft pure-add path).
+    const dels = [...proposal.querySelectorAll(".tdl-del .tdl-code")].map((s) => s.textContent);
+    const adds = [...proposal.querySelectorAll(".tdl-add .tdl-code")].map((s) => s.textContent);
     expect(dels).toEqual(["b"]);
-    expect([...region.querySelectorAll(".tdl-add .tdl-sign")].map((s) => s.textContent)).toEqual(["+", "+"]);
-    expect(region.querySelector(".tdl-del .tdl-sign")!.textContent).toBe("-");
+    expect(adds).toEqual(["B", "c"]);
 
-    const openDiffs = posted.filter((m: any) => m.type === "openDiff");
-    expect(openDiffs).toHaveLength(1);
-    expect(openDiffs[0]).toEqual({
-      type: "openDiff",
-      path: "src/foo.ts",
-      oldText: "a\nb",
-      newText: "a\nB\nc",
-      requestId: 7,
-    });
+    // No auto-open — that was the "always looks like image 1" native dump.
+    expect(posted.filter((m: any) => m.type === "openDiff")).toHaveLength(0);
   });
 
-  it("keeps a manual 'open full diff' button that re-opens the same diff", () => {
+  it("keeps a manual 'open full diff' button that opens the native editor on demand", () => {
     const { window, posted, doc } = bootWebview();
     seedDiffAndCard(window, 9);
 
@@ -71,23 +73,65 @@ describe("permission card diff preview (real chat.js in a DOM)", () => {
     click(window, btn);
 
     const openDiffs = posted.filter((m: any) => m.type === "openDiff");
-    expect(openDiffs).toHaveLength(2); // auto-open + the manual re-open
-    expect(openDiffs[1].requestId).toBe(9);
+    expect(openDiffs).toHaveLength(1);
+    expect(openDiffs[0]).toEqual({
+      type: "openDiff",
+      path: "src/foo.ts",
+      oldText: "a\nb",
+      newText: "a\nB\nc",
+      requestId: 9,
+    });
   });
 
-  it("answering carries the same requestId so the host can close the auto-opened tab", () => {
+  it("Keep posts allow_once; Undo posts reject_once", () => {
     const { window, posted, doc } = bootWebview();
     seedDiffAndCard(window, 11);
 
-    const allow = [...doc.querySelectorAll(".card.permission .card-actions button")]
-      .find((b) => b.textContent === "Allow once") as HTMLButtonElement;
-    click(window, allow);
+    click(window, doc.querySelector(".edit-proposal-keep") as HTMLElement);
+    expect(posted.find((m: any) => m.type === "permissionAnswer")).toEqual({
+      type: "permissionAnswer",
+      requestId: 11,
+      optionId: "allow",
+    });
 
-    const answer = posted.find((m: any) => m.type === "permissionAnswer");
-    expect(answer).toEqual({ type: "permissionAnswer", requestId: 11, optionId: "allow" });
+    // Fresh card for Undo.
+    const { window: w2, posted: p2, doc: d2 } = bootWebview();
+    seedDiffAndCard(w2, 12);
+    click(w2, d2.querySelector(".edit-proposal-undo") as HTMLElement);
+    expect(p2.find((m: any) => m.type === "permissionAnswer")).toEqual({
+      type: "permissionAnswer",
+      requestId: 12,
+      optionId: "rej",
+    });
   });
 
-  it("does not auto-open when the permission has no diff (e.g. a command)", () => {
+  it("pure additions use the soft green proposal body (no line gutters)", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, {
+      type: "toolCallUpdate",
+      call: {
+        toolCallId: "tc-add",
+        content: [{ type: "diff", path: "README.md", oldText: "", newText: "hello\nworld" }],
+      },
+    });
+    dispatch(window, {
+      type: "permissionRequest",
+      req: {
+        id: 20,
+        toolCall: { toolCallId: "tc-add", kind: "edit", title: "Edit README.md" },
+        options: [
+          { optionId: "allow", name: "Allow once", kind: "allow_once" },
+          { optionId: "rej", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    });
+    const soft = doc.querySelector(".edit-proposal-soft") as HTMLElement;
+    expect(soft).not.toBeNull();
+    expect(soft.textContent).toBe("hello\nworld");
+    expect(doc.querySelector(".tdl")).toBeNull();
+  });
+
+  it("does not use the proposal shell when the permission has no diff (e.g. a command)", () => {
     const { window, posted, doc } = bootWebview();
     dispatch(window, {
       type: "permissionRequest",
@@ -99,7 +143,12 @@ describe("permission card diff preview (real chat.js in a DOM)", () => {
     });
 
     expect(doc.querySelector(".card.permission")).not.toBeNull();
+    expect(doc.querySelector(".edit-proposal")).toBeNull();
     expect(doc.querySelector(".card.permission .preview-link")).toBeNull();
     expect(posted.filter((m: any) => m.type === "openDiff")).toHaveLength(0);
+    // Classic option list still works.
+    expect(
+      [...doc.querySelectorAll(".card.permission .card-actions button")].map((b) => b.textContent),
+    ).toEqual(["Allow once"]);
   });
 });

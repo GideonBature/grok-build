@@ -171,6 +171,8 @@ export type WebviewMsg =
   | { type: "openFile"; path: string }
   | { type: "openUrl"; url: string }
   | { type: "openDiff"; path: string; oldText: string; newText: string; requestId?: number | string }
+  /** Reverse an already-applied edit (Auto accept / after Keep was implicit). */
+  | { type: "undoEdit"; path: string; oldText: string; newText: string }
   | { type: "exportExpr"; action: string; kind: string; current?: string; svg?: string; png?: string; svgDark?: string; svgLight?: string }
   | { type: "setEffort"; level: string }
   | { type: "openGlobalConfig" }
@@ -251,7 +253,7 @@ const HOST_MESSAGE_TYPE_MAP: Record<HostMsg["type"], true> = {
 const WEBVIEW_MESSAGE_TYPE_MAP: Record<WebviewMsg["type"], true> = {
   ready: true, send: true, newSession: true, cancel: true, pickModel: true,
   setMode: true, removeChip: true, toggleChip: true, openFile: true, openUrl: true,
-  openDiff: true, exportExpr: true, setEffort: true, openGlobalConfig: true,
+  openDiff: true, undoEdit: true, exportExpr: true, setEffort: true, openGlobalConfig: true,
   openProjectConfig: true, runMcpList: true, mcpRefresh: true, mcpAddPreset: true,
   mcpRemove: true, mcpApplyRestart: true, showLogs: true, moveView: true,
   setShowThinking: true, setExpandCommandOutputs: true, setSteerByDefault: true,

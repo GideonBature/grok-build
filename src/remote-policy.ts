@@ -77,6 +77,7 @@ export const INBOUND_DISPOSITION: Record<WebviewMsg["type"], InboundDisposition>
   openFile: "host-local",
   openUrl: "host-local",
   openDiff: "host-local",
+  undoEdit: "host-local", // rewrites a local file via WorkspaceEdit
   exportExpr: "host-local",
   openGlobalConfig: "host-local",
   openProjectConfig: "host-local",

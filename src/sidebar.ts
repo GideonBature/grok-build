@@ -2394,6 +2394,9 @@ See design doc for the full state machine diagram.`;
       case "openDiff":
         await this.openDiffEditor(msg.path, msg.oldText, msg.newText, msg.requestId);
         break;
+      case "undoEdit":
+        await this.undoAppliedEdit(msg.path, msg.oldText ?? "", msg.newText ?? "");
+        break;
       case "exportExpr":
         await this.exportExpr(msg);
         break;
@@ -3401,6 +3404,73 @@ See design doc for the full state machine diagram.`;
       `Grok proposed: ${base}`,
       { preview: true, preserveFocus: true } as vscode.TextDocumentShowOptions,
     );
+  }
+
+  /**
+   * Reverse an already-applied edit (the Auto-accept / post-write path). Replaces
+   * the first occurrence of `newText` with `oldText` in the file on disk so a
+   * Keep/Undo proposal in chat can actually Undo. No-op with a warning when the
+   * file no longer contains the applied text (already undone, or later edits).
+   */
+  private async undoAppliedEdit(filePath: string, oldText: string, newText: string): Promise<void> {
+    const cwd = this.cwd();
+    const abs = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+    try {
+      const uri = vscode.Uri.file(abs);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const text = doc.getText();
+      // Pure create (old empty): undo by deleting the whole file only when the
+      // file still equals the written content — anything else is too ambiguous.
+      if (!oldText && newText) {
+        if (text === newText || text.replace(/\r\n/g, "\n") === newText.replace(/\r\n/g, "\n")) {
+          await vscode.workspace.fs.delete(uri);
+          void vscode.window.showInformationMessage(`Undid create of ${path.basename(abs)}`);
+          return;
+        }
+      }
+      if (!newText) {
+        // Pure deletion: re-insert oldText at the start if the file no longer has it.
+        if (oldText && !text.includes(oldText)) {
+          const edit = new vscode.WorkspaceEdit();
+          edit.insert(uri, new vscode.Position(0, 0), oldText);
+          const ok = await vscode.workspace.applyEdit(edit);
+          if (ok) await doc.save();
+          return;
+        }
+        void vscode.window.showWarningMessage(`Could not undo edit in ${path.basename(abs)} — content no longer matches.`);
+        return;
+      }
+      const norm = (s: string) => s.replace(/\r\n/g, "\n");
+      const hay = norm(text);
+      const needle = norm(newText);
+      const idx = hay.indexOf(needle);
+      if (idx < 0) {
+        void vscode.window.showWarningMessage(
+          `Could not undo edit in ${path.basename(abs)} — the applied text is no longer in the file.`,
+        );
+        return;
+      }
+      // Map the LF-normalized index back onto the real document by counting
+      // characters on the same normalized walk (CRLF files keep offsets equal
+      // after we rebuild from the normalized splice + original line endings).
+      const next = hay.slice(0, idx) + norm(oldText) + hay.slice(idx + needle.length);
+      const useCrlf = text.includes("\r\n");
+      const out = useCrlf ? next.replace(/\n/g, "\r\n") : next;
+      const full = new vscode.Range(doc.positionAt(0), doc.positionAt(text.length));
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(uri, full, out);
+      const ok = await vscode.workspace.applyEdit(edit);
+      if (!ok) {
+        void vscode.window.showErrorMessage(`Failed to undo edit in ${path.basename(abs)}`);
+        return;
+      }
+      await doc.save();
+      await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: true });
+    } catch (e) {
+      void vscode.window.showErrorMessage(
+        `Failed to undo edit: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /** Close the diff tab opened for a pending permission request and free its

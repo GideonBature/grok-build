@@ -28,7 +28,7 @@
   ];
   const WEBVIEW_MESSAGE_TYPES = [
     "ready", "send", "newSession", "cancel", "pickModel", "setMode", "removeChip",
-    "toggleChip", "openFile", "openUrl", "openDiff", "exportExpr", "setEffort",
+    "toggleChip", "openFile", "openUrl", "openDiff", "undoEdit", "exportExpr", "setEffort",
     "openGlobalConfig", "openProjectConfig", "runMcpList", "mcpRefresh", "mcpAddPreset",
     "mcpRemove", "mcpApplyRestart", "showLogs", "moveView",
     "setShowThinking", "setExpandCommandOutputs",

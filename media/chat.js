@@ -3235,18 +3235,17 @@
       if (!item._userToggledDetail) details.hidden = !detailShouldExpand(details);
     }
     while (details.firstChild) details.removeChild(details.firstChild);
-    // One region + ONE "open diff →" per BLOCK (not per site) — the link's payload
-    // stays the block's own oldText/newText, which is what the native diff editor wants.
+    // Cursor-style Keep/Undo proposal per block (not a raw line dump). Keep is a
+    // soft accept (edit is already on disk under Auto accept); Undo reverts it.
     for (const { diff, hunks } of blocks) {
-      details.appendChild(buildInlineDiffRegion(hunks));
-      const preview = document.createElement("button");
-      preview.className = "preview-link";
-      preview.textContent = "open diff →";
-      preview.onclick = (e) => {
-        e.stopPropagation(); // don't toggle the row/group expand
-        vscode.postMessage({ type: "openDiff", path: diff.path, oldText: diff.oldText, newText: diff.newText });
-      };
-      details.appendChild(preview);
+      const proposal = buildEditProposal({
+        path: diff.path,
+        oldText: diff.oldText || "",
+        newText: diff.newText || "",
+        hunks,
+        mode: "applied", // already written — Keep dismisses, Undo reverts
+      });
+      details.appendChild(proposal);
     }
     if (fresh) {
       item.appendChild(details);
@@ -3257,6 +3256,140 @@
       if (group && !group._userToggled) setGroupExpanded(group, groupShouldExpand(group));
     }
     scrollToBottom();
+  }
+
+  /**
+   * Cursor-style edit proposal: a green (or red/green) block with Keep / Undo
+   * floating top-right — the review surface users expect when a file changes,
+   * instead of only a line-numbered dump or an auto-opened native diff tab.
+   *
+   * mode:
+   *   - "applied"  — edit already on disk (Auto accept / post-write). Keep
+   *                  dismisses the actions; Undo posts `undoEdit` to reverse it.
+   *   - "pending"  — permission card, write not yet allowed. Keep/Undo call the
+   *                  supplied onKeep/onUndo (wired to allow/reject optionIds).
+   */
+  function buildEditProposal(opts) {
+    const pathLabel = opts.path || "file";
+    const oldText = opts.oldText || "";
+    const newText = opts.newText || "";
+    const hunks = opts.hunks || [];
+    const mode = opts.mode || "applied";
+    let added = 0;
+    let removed = 0;
+    for (const h of hunks) {
+      added += (h.result && h.result.added) || 0;
+      removed += (h.result && h.result.removed) || 0;
+    }
+
+    const shell = document.createElement("div");
+    shell.className = "edit-proposal" + (removed && !added ? " edit-proposal-del" : "");
+    shell.setAttribute("role", "group");
+    shell.setAttribute("aria-label", `Proposed edit to ${pathLabel}`);
+
+    const bar = document.createElement("div");
+    bar.className = "edit-proposal-bar";
+    const meta = document.createElement("div");
+    meta.className = "edit-proposal-meta";
+    const pathEl = document.createElement("span");
+    pathEl.className = "edit-proposal-path";
+    pathEl.textContent = pathLabel;
+    pathEl.title = pathLabel;
+    meta.appendChild(pathEl);
+    meta.appendChild(makeDiffStat(added, removed));
+    bar.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "edit-proposal-actions";
+    const keepBtn = document.createElement("button");
+    keepBtn.type = "button";
+    keepBtn.className = "edit-proposal-btn edit-proposal-keep";
+    keepBtn.textContent = opts.keepLabel || "Keep";
+    const undoBtn = document.createElement("button");
+    undoBtn.type = "button";
+    undoBtn.className = "edit-proposal-btn edit-proposal-undo";
+    undoBtn.textContent = opts.undoLabel || "Undo";
+    actions.appendChild(keepBtn);
+    actions.appendChild(undoBtn);
+    // Optional third action (e.g. Allow always on a permission card).
+    if (opts.extraAction && opts.onExtra) {
+      const extra = document.createElement("button");
+      extra.type = "button";
+      extra.className = "edit-proposal-btn edit-proposal-extra";
+      extra.textContent = opts.extraAction;
+      extra.onclick = (e) => {
+        e.stopPropagation();
+        opts.onExtra();
+      };
+      actions.appendChild(extra);
+    }
+    bar.appendChild(actions);
+    shell.appendChild(bar);
+
+    const body = document.createElement("div");
+    body.className = "edit-proposal-body";
+    // Pure additions → soft green block of the new text (image-2 style). Mixed
+    // replace/delete → Codex line-by-line so removals stay visible.
+    if (added > 0 && removed === 0 && newText) {
+      body.classList.add("edit-proposal-soft");
+      body.textContent = newText;
+    } else if (hunks.length) {
+      body.classList.add("edit-proposal-diff");
+      body.appendChild(buildInlineDiffRegion(hunks));
+    } else {
+      body.classList.add("edit-proposal-soft");
+      body.textContent = newText || oldText || "(empty change)";
+    }
+    shell.appendChild(body);
+
+    const footer = document.createElement("div");
+    footer.className = "edit-proposal-footer";
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "preview-link";
+    preview.textContent = "open full diff →";
+    preview.onclick = (e) => {
+      e.stopPropagation();
+      vscode.postMessage({
+        type: "openDiff",
+        path: opts.path,
+        oldText,
+        newText,
+        requestId: opts.requestId,
+      });
+    };
+    footer.appendChild(preview);
+    shell.appendChild(footer);
+
+    const settle = (label) => {
+      actions.innerHTML = "";
+      const done = document.createElement("span");
+      done.className = "edit-proposal-settled";
+      done.textContent = label;
+      actions.appendChild(done);
+      shell.classList.add("edit-proposal-done");
+    };
+
+    keepBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (mode === "pending" && typeof opts.onKeep === "function") {
+        opts.onKeep();
+        return; // permission card collapses itself
+      }
+      settle("Kept");
+    };
+    undoBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (mode === "pending" && typeof opts.onUndo === "function") {
+        opts.onUndo();
+        return;
+      }
+      // Applied: reverse the write on disk.
+      vscode.postMessage({ type: "undoEdit", path: opts.path, oldText, newText });
+      settle("Undone");
+    };
+
+    return shell;
   }
 
   // "+A −R" pill for an edit row (green additions, red removals). Uses a real
@@ -4270,78 +4403,81 @@
     el.appendChild(title);
 
     const diff = state.pendingDiffByToolCallId.get(req.toolCall?.toolCallId);
+    const options = req.options || [];
+    const answer = (opt) => {
+      if (!opt) return;
+      vscode.postMessage({
+        type: "permissionAnswer",
+        requestId: req.id,
+        optionId: opt.optionId,
+      });
+      // Collapse to one muted line and show the working indicator — grok
+      // resumes the turn after the answer.
+      collapsePermissionCard(el, opt.kind, cardTitle);
+      showGrokking();
+    };
+    const byKind = (kind) => options.find((o) => o.kind === kind);
+
     if (diff) {
-      // Codex / Copilot-style: show the green/red lines right on the card so the
-      // review happens in-chat. The native "open diff →" tab is a secondary action
-      // (still auto-opened once for the side-by-side editor, #21).
+      // Cursor-style Keep / Undo proposal in chat — primary review surface.
+      // Do NOT auto-open the native vscode.diff tab (that looks like a raw
+      // line-numbered dump and steals the review away from Keep/Undo).
       const sites = Array.isArray(diff.sites) && diff.sites.length
         ? diff.sites
         : [{ oldText: diff.oldText || "", newText: diff.newText || "" }];
-      let added = 0;
-      let removed = 0;
       const hunks = [];
       for (const site of sites) {
         const result = computeLineDiff(site.oldText || "", site.newText || "");
-        added += result.added;
-        removed += result.removed;
         hunks.push({ site, result });
       }
-
-      const subtitle = document.createElement("div");
-      subtitle.className = "card-subtitle perm-diff-meta";
-      const pathEl = document.createElement("span");
-      pathEl.className = "perm-diff-path";
-      pathEl.textContent = diff.path || "file";
-      subtitle.appendChild(pathEl);
-      subtitle.appendChild(document.createTextNode(" "));
-      subtitle.appendChild(makeDiffStat(added, removed));
-      el.appendChild(subtitle);
-
-      const region = buildInlineDiffRegion(hunks);
-      region.classList.add("perm-diff-region");
-      el.appendChild(region);
-
-      const openDiff = () =>
-        vscode.postMessage({
-          type: "openDiff",
-          path: diff.path,
-          oldText: diff.oldText,
-          newText: diff.newText,
-          requestId: req.id,
-        });
-      const preview = document.createElement("button");
-      preview.className = "preview-link";
-      // Auto-opens below; the button stays so you can re-open if you closed it.
-      preview.textContent = "open full diff →";
-      preview.onclick = openDiff;
-      el.appendChild(preview);
-      // Open the native side-by-side editor once when the card appears (#21) so a
-      // larger change can be reviewed next to the chat; the inline region above is
-      // the always-visible glanceable surface.
-      openDiff();
+      const allowOnce = byKind("allow_once");
+      const rejectOnce = byKind("reject_once");
+      const allowAlways = byKind("allow_always");
+      const proposal = buildEditProposal({
+        path: diff.path,
+        oldText: diff.oldText || "",
+        newText: diff.newText || "",
+        hunks,
+        mode: "pending",
+        requestId: req.id,
+        keepLabel: "Keep",
+        undoLabel: "Undo",
+        extraAction: allowAlways ? (allowAlways.name || "Always") : null,
+        onKeep: () => answer(allowOnce || allowAlways),
+        onUndo: () => answer(rejectOnce),
+        onExtra: allowAlways ? () => answer(allowAlways) : null,
+      });
+      el.appendChild(proposal);
+      // Any leftover options the proposal didn't cover (rare) still get a row.
+      const covered = new Set(
+        [allowOnce, rejectOnce, allowAlways].filter(Boolean).map((o) => o.optionId),
+      );
+      const rest = options.filter((o) => !covered.has(o.optionId));
+      if (rest.length) {
+        const actions = document.createElement("div");
+        actions.className = "card-actions";
+        for (const opt of rest) {
+          const btn = document.createElement("button");
+          btn.textContent = opt.name;
+          btn.onclick = () => answer(opt);
+          actions.appendChild(btn);
+        }
+        el.appendChild(actions);
+      }
+    } else {
+      // Command / non-edit permission — classic option list (no Keep/Undo shell).
+      const actions = document.createElement("div");
+      actions.className = "card-actions";
+      for (const opt of options) {
+        const btn = document.createElement("button");
+        btn.textContent = opt.name;
+        if (opt.kind === "allow_once") btn.classList.add("primary");
+        if (opt.kind === "reject_once") btn.classList.add("danger");
+        btn.onclick = () => answer(opt);
+        actions.appendChild(btn);
+      }
+      el.appendChild(actions);
     }
-
-    const actions = document.createElement("div");
-    actions.className = "card-actions";
-    for (const opt of req.options || []) {
-      const btn = document.createElement("button");
-      btn.textContent = opt.name;
-      if (opt.kind === "allow_once") btn.classList.add("primary");
-      if (opt.kind === "reject_once") btn.classList.add("danger");
-      btn.onclick = () => {
-        vscode.postMessage({
-          type: "permissionAnswer",
-          requestId: req.id,
-          optionId: opt.optionId,
-        });
-        // Collapse to one muted line and show the working indicator — grok
-        // resumes the turn after the answer.
-        collapsePermissionCard(el, opt.kind, cardTitle);
-        showGrokking();
-      };
-      actions.appendChild(btn);
-    }
-    el.appendChild(actions);
     messagesEl.appendChild(el);
     forceScrollToBottom(); // a pending permission must be visible (#16)
   }
