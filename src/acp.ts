@@ -29,6 +29,19 @@ import {
 } from "./plan-gate";
 import { resolveGrokHome } from "./sessions";
 import { filterAdvertisedCommands } from "./slash-filter";
+import {
+  isWorktreeCreatedStatus,
+  isWorktreeFailedStatus,
+  parseWorktreeApplyResult,
+  parseWorktreeCreateResult,
+  parseWorktreeListResult,
+  type WorktreeApplyMode,
+  type WorktreeApplyResult,
+  type WorktreeCreateAccepted,
+  type WorktreeListRow,
+  type WorktreeStatusParams,
+  unwrapWorktreePayload,
+} from "./worktree";
 
 export type EffortLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -461,20 +474,207 @@ export class AcpClient extends EventEmitter {
    * so a partial fork would replay a conversation the model has forgotten.
    * Returns the new session id, or `"unsupported"` on an older CLI.
    */
-  async forkSession(cwd: string): Promise<{ newSessionId: string } | "unsupported"> {
+  /**
+   * @param sourceCwd cwd of the source session (required on the wire)
+   * @param newCwd cwd for the fork — same as source for a conversation-only
+   *   fork; a worktree path for "fork into worktree" (probe-confirmed: session
+   *   files land under `~/.grok/sessions/<urlencoded-newCwd>/`)
+   */
+  async forkSession(
+    sourceCwd: string,
+    newCwd?: string,
+  ): Promise<{ newSessionId: string; newCwd?: string } | "unsupported"> {
     if (!this.sessionId) throw new Error("no session");
     try {
       const r = await this.request("_x.ai/session/fork", {
         sourceSessionId: this.sessionId,
-        sourceCwd: cwd,
-        newCwd: cwd,
+        sourceCwd,
+        newCwd: newCwd || sourceCwd,
       });
       const newSessionId = r?.newSessionId;
       if (!newSessionId) throw new Error("fork returned no newSessionId");
-      return { newSessionId };
+      return {
+        newSessionId,
+        newCwd: typeof r?.newCwd === "string" ? r.newCwd : newCwd || sourceCwd,
+      };
     } catch (e: any) {
       if (isMethodNotFoundError(e)) {
         this.opts.log("[fork] CLI does not support _x.ai/session/fork");
+        return "unsupported";
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Create a git worktree via `_x.ai/git/worktree/create` and wait until the
+   * `_x.ai/git/worktree/status` notification reports `created` (or `failed`).
+   *
+   * Does **not** rebind this client's agent cwd — callers that want an agent
+   * editing inside the worktree must start a *new* session with
+   * `cwd = worktreePath` (see research/worktree.md).
+   *
+   * Returns `"unsupported"` on older CLIs (-32601), never throws for that.
+   */
+  async createWorktree(opts: {
+    sourcePath: string;
+    label?: string;
+    gitRef?: string;
+    timeoutMs?: number;
+  }): Promise<WorktreeCreateAccepted | "unsupported"> {
+    if (!this.sessionId) throw new Error("no session");
+    const params: Record<string, string> = {
+      sessionId: this.sessionId,
+      sourcePath: opts.sourcePath,
+    };
+    if (opts.label) params.label = opts.label;
+    if (opts.gitRef) params.gitRef = opts.gitRef;
+
+    // Arm the status listener BEFORE the create RPC — the CoW copy can finish
+    // (and emit `created`) so fast that a post-response listener would miss it.
+    const timeoutMs = opts.timeoutMs ?? 120_000;
+    let expectedPath: string | undefined;
+    let settle: {
+      resolve: (v: WorktreeCreateAccepted) => void;
+      reject: (e: Error) => void;
+    } | null = null;
+    let acceptedSnapshot: WorktreeCreateAccepted | null = null;
+
+    const onStatus = (p: WorktreeStatusParams) => {
+      if (!settle) return;
+      // Match path once create RPC told us it; before that, accept any created
+      // for this client (create response and status can race either way).
+      if (isWorktreeCreatedStatus(p, expectedPath)) {
+        const base = acceptedSnapshot;
+        cleanup();
+        settle.resolve({
+          status: "created",
+          sessionId: p.sessionId || base?.sessionId || this.sessionId!,
+          worktreePath: p.worktreePath || base?.worktreePath || expectedPath || "",
+          sourceGitRoot: p.sourceGitRoot || base?.sourceGitRoot,
+        });
+        return;
+      }
+      if (isWorktreeFailedStatus(p, expectedPath)) {
+        cleanup();
+        settle.reject(new Error(p.message || p.error || "Worktree create failed"));
+      }
+    };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      this.off("worktreeStatus", onStatus);
+    };
+
+    const timer = setTimeout(() => {
+      if (!settle) return;
+      cleanup();
+      settle.reject(new Error(`Worktree create timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    this.on("worktreeStatus", onStatus);
+
+    const waitCreated = new Promise<WorktreeCreateAccepted>((resolve, reject) => {
+      settle = { resolve, reject };
+    });
+
+    try {
+      const r = await this.request("_x.ai/git/worktree/create", params);
+      const parsed = parseWorktreeCreateResult(r);
+      if (!parsed) {
+        cleanup();
+        throw new Error("worktree create returned no worktreePath");
+      }
+      acceptedSnapshot = parsed;
+      expectedPath = parsed.worktreePath;
+      if (parsed.status === "created") {
+        cleanup();
+        return parsed;
+      }
+      return await waitCreated;
+    } catch (e: any) {
+      cleanup();
+      if (isMethodNotFoundError(e)) {
+        this.opts.log("[worktree] CLI does not support _x.ai/git/worktree/create");
+        return "unsupported";
+      }
+      throw e;
+    }
+  }
+
+  async listWorktrees(cwd?: string): Promise<WorktreeListRow[] | "unsupported"> {
+    try {
+      const r = await this.request("_x.ai/git/worktree/list", cwd ? { cwd } : {});
+      return parseWorktreeListResult(r);
+    } catch (e: any) {
+      if (isMethodNotFoundError(e)) {
+        this.opts.log("[worktree] CLI does not support _x.ai/git/worktree/list");
+        return "unsupported";
+      }
+      throw e;
+    }
+  }
+
+  async removeWorktree(worktreePath: string): Promise<{ removed: boolean; resolvedPath?: string } | "unsupported"> {
+    if (!this.sessionId) throw new Error("no session");
+    try {
+      const r = await this.request("_x.ai/git/worktree/remove", {
+        sessionId: this.sessionId,
+        worktreePath,
+      });
+      const body = unwrapWorktreePayload<{ removed?: boolean; resolvedPath?: string }>(r);
+      return {
+        removed: body?.removed === true,
+        resolvedPath: typeof body?.resolvedPath === "string" ? body.resolvedPath : undefined,
+      };
+    } catch (e: any) {
+      if (isMethodNotFoundError(e)) {
+        this.opts.log("[worktree] CLI does not support _x.ai/git/worktree/remove");
+        return "unsupported";
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Ask the CLI to apply a worktree back toward its source (`mode: merge|overwrite`).
+   * The returned file list is useful even when the CLI's on-disk merge is incomplete
+   * — the host ships differing files via `shipWorktreeFiles` (research/worktree.md).
+   */
+  async applyWorktree(opts: {
+    worktreePath: string;
+    mode?: WorktreeApplyMode;
+  }): Promise<WorktreeApplyResult | "unsupported"> {
+    if (!this.sessionId) throw new Error("no session");
+    const params: Record<string, string> = {
+      sessionId: this.sessionId,
+      worktreePath: opts.worktreePath,
+    };
+    if (opts.mode) params.mode = opts.mode;
+    try {
+      const r = await this.request("_x.ai/git/worktree/apply", params);
+      const parsed = parseWorktreeApplyResult(r);
+      if (!parsed) throw new Error("worktree apply returned no status");
+      return parsed;
+    } catch (e: any) {
+      if (isMethodNotFoundError(e)) {
+        this.opts.log("[worktree] CLI does not support _x.ai/git/worktree/apply");
+        return "unsupported";
+      }
+      throw e;
+    }
+  }
+
+  async gcWorktrees(sourcePath?: string): Promise<{ dead_removed?: number; expired_removed?: number } | "unsupported"> {
+    try {
+      const params: Record<string, string> = {};
+      if (this.sessionId) params.sessionId = this.sessionId;
+      if (sourcePath) params.sourcePath = sourcePath;
+      const r = await this.request("_x.ai/git/worktree/gc", params);
+      return unwrapWorktreePayload(r) ?? {};
+    } catch (e: any) {
+      if (isMethodNotFoundError(e)) {
+        this.opts.log("[worktree] CLI does not support _x.ai/git/worktree/gc");
         return "unsupported";
       }
       throw e;
@@ -838,6 +1038,15 @@ export class AcpClient extends EventEmitter {
         // test/fixtures/composer-subagent-session.jsonl), and doubles as a
         // completion backstop for the card.
         this.emit("subagentLifecycle", params?.update);
+        if (id != null) this.respondOk(id, {});
+        return;
+      }
+      if (
+        method === "_x.ai/git/worktree/status" ||
+        method === "x.ai/git/worktree/status"
+      ) {
+        // Async worktree create progress/created/failed — createWorktree waits on this.
+        this.emit("worktreeStatus", params as WorktreeStatusParams);
         if (id != null) this.respondOk(id, {});
         return;
       }

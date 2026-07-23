@@ -10,6 +10,7 @@
   const newBtn = $("new-btn");
   const historyBtn = $("history-btn");
   const modeBtn = $("mode-btn");
+  const modelChipBtn = $("model-chip-btn");
   const gearBtn = $("gear-btn");
   const addBtn = $("add-btn");
   const chipsEl = $("chips");
@@ -20,6 +21,7 @@
   const contextPopover = $("context-popover");
   const slashPopover = $("slash-popover");
   const modePopover = $("mode-popover");
+  const modelPopover = $("model-popover");
   const gearPopover = $("gear-popover");
   const addPopover = $("add-popover");
   const historyPopover = $("history-popover");
@@ -28,13 +30,22 @@
   // grok's accepted reasoning-effort values, lowest → highest (matches the CLI;
   // `max` is not a real grok level and is intentionally excluded — see #3/#4).
   const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
+  // Composer-facing labels (Codex-style Light/Medium/High) while keeping CLI ids.
+  const EFFORT_LABELS = {
+    none: "None",
+    minimal: "Minimal",
+    low: "Light",
+    medium: "Medium",
+    high: "High",
+    xhigh: "Extra High",
+  };
   const EFFORT_TOOLTIPS = {
     none: "None — no extra reasoning",
     minimal: "Minimal — least reasoning",
-    low: "Low — fast, lightweight reasoning",
+    low: "Light — fast, lightweight reasoning",
     medium: "Medium — balanced",
     high: "High — deeper reasoning",
-    xhigh: "XHigh — deepest reasoning, slowest",
+    xhigh: "Extra High — deepest reasoning, slowest",
   };
 
   const state = {
@@ -283,25 +294,34 @@
     mic: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`,
     cornerDownRight: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/></svg>`,
     gitBranch: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
+    hand: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>`,
+    target: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>`,
+    folder: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`,
+    paperclip: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
     // Animated equalizer bars shown while listening (CSS drives the bounce).
     micWaves: `<span class="mic-waves" aria-hidden="true"><i></i><i></i><i></i><i></i></span>`,
   };
 
+  // Mode picker labels stay stable for tests; shortLabel is the compact composer chip.
+  // Descriptions mirror Codex's approval language while matching real Grok behavior.
   const MODE_META = {
     agent: {
-      icon: ICON.bot,
+      icon: ICON.hand,
       label: "Agent mode",
-      desc: "Grok acts directly, asking approval only for changes it judges sensitive",
+      shortLabel: "Agent",
+      desc: "Ask for approval — Grok asks before editing files and running commands",
     },
     plan: {
       icon: ICON.listTree,
       label: "Plan mode",
-      desc: "Grok explores and proposes a plan; file writes and commands are blocked until you approve it",
+      shortLabel: "Plan",
+      desc: "Plan first — explore and propose a plan; workspace writes stay blocked until you approve",
     },
     yolo: {
       icon: ICON.zap,
       label: "Auto accept",
-      desc: "Grok automatically approves all permission requests (YOLO)",
+      shortLabel: "Auto",
+      desc: "Approve for me — automatically approve all permission requests (YOLO)",
     },
   };
 
@@ -342,11 +362,49 @@
     return `${h}:${m.toString().padStart(2, "0")} ${ampm}`;
   }
 
+  // ---------- markdown / shared pure helpers (must load before chip paint) ----------
+
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, commandProgramLabel, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage } = globalThis.GrokWebviewHelpers;
+
   function updateModeBtn(modeId) {
     const meta = MODE_META[modeId] || MODE_META.agent;
-    modeBtn.innerHTML = `${meta.icon}<span class="btn-label">${escapeHtml(meta.label)}</span>`;
+    // Compact composer chip (Codex-style) — full label lives in the popover.
+    modeBtn.innerHTML = `${meta.icon}<span class="btn-label">${escapeHtml(meta.shortLabel || meta.label)}</span>`;
+    modeBtn.title = meta.desc || "How should Grok actions be approved?";
     modeBtn.classList.toggle("plan-active", modeId === "plan");
     modeBtn.classList.toggle("yolo-active", modeId === "yolo");
+  }
+
+  function currentEffortId() {
+    return state.effort && EFFORT_LEVELS.includes(state.effort) ? state.effort : "";
+  }
+
+  function currentEffortLabel() {
+    const id = currentEffortId();
+    return id ? (EFFORT_LABELS[id] || capitalize(id)) : "Default";
+  }
+
+  // Single composer chip: model + reasoning effort in one pill (ChatGPT-style).
+  function updateModelChip() {
+    if (!modelChipBtn) return;
+    const locked = !!state.busy;
+    const name = modelDisplayName(state.currentModelId, state.availableModels)
+      || state.currentModelId
+      || "Model";
+    const effortLabel = currentEffortLabel();
+    // Compact "Model Effort" label — full detail lives in the popover + title.
+    const label = `${truncate(name, 14)} ${effortLabel}`;
+    modelChipBtn.innerHTML = `${ICON.zap}<span class="chip-label">${escapeHtml(label)}</span>`;
+    modelChipBtn.disabled = locked;
+    modelChipBtn.classList.toggle("disabled", locked);
+    const tip = `${name} · ${effortLabel}`;
+    modelChipBtn.title = locked
+      ? `${tip} — available once the session is ready`
+      : `${tip} — change model or reasoning`;
+  }
+
+  function refreshComposerChips() {
+    updateModelChip();
   }
 
   newBtn.innerHTML = ICON.squarePen;
@@ -356,10 +414,7 @@
   addBtn.innerHTML = ICON.plus;
   scrollBottomBtn.innerHTML = `${ICON.arrowDown}<span class="scroll-bottom-label">Scroll to bottom</span>`;
   updateModeBtn("agent");
-
-  // ---------- markdown ----------
-
-  const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, splitMath, stripUnsupportedTex, toolFailureText, commandProgramLabel, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage } = globalThis.GrokWebviewHelpers;
+  refreshComposerChips();
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -964,6 +1019,7 @@
 
   function closePopovers() {
     modePopover.hidden = true;
+    if (modelPopover) modelPopover.hidden = true;
     gearPopover.hidden = true;
     addPopover.hidden = true;
     historyPopover.hidden = true;
@@ -1208,6 +1264,7 @@
         e.stopPropagation();
         state.effort = state.effort === id ? "" : id;
         vscode.postMessage({ type: "setEffort", level: state.effort });
+        updateModelChip();
         renderGearMain();
         gearPopover.hidden = false;
       };
@@ -1222,6 +1279,22 @@
     addSection("Session");
     addGearItem(`<span>Fork conversation</span>`, () => {
       vscode.postMessage({ type: "forkSession" });
+      closePopovers();
+    });
+    addGearItem(`<span>Fork into worktree</span>`, () => {
+      vscode.postMessage({ type: "forkIntoWorktree" });
+      closePopovers();
+    });
+    addGearItem(`<span>New worktree session</span>`, () => {
+      vscode.postMessage({ type: "newWorktreeSession" });
+      closePopovers();
+    });
+    addGearItem(`<span>Manage worktrees</span>`, () => {
+      vscode.postMessage({ type: "manageWorktrees" });
+      closePopovers();
+    });
+    addGearItem(`<span>Apply this worktree to workspace</span>`, () => {
+      vscode.postMessage({ type: "applyFocusedWorktree" });
       closePopovers();
     });
 
@@ -1473,21 +1546,138 @@
     modePopover.hidden = false;
   }
 
+  function addMenuSection(title) {
+    const el = document.createElement("div");
+    el.className = "popover-section";
+    el.textContent = title;
+    addPopover.appendChild(el);
+  }
+
+  function addMenuItem(iconHtml, label, detail, onClick, opts) {
+    const item = document.createElement("div");
+    item.className = "toolbar-popover-item add-menu-item" + (opts && opts.danger ? " add-menu-danger" : "");
+    item.innerHTML =
+      `<span class="add-item-icon">${iconHtml || ""}</span>` +
+      `<span class="add-item-body">` +
+        `<span class="add-item-label">${escapeHtml(label)}</span>` +
+        (detail ? `<span class="add-item-desc">${escapeHtml(detail)}</span>` : "") +
+      `</span>`;
+    item.onclick = (e) => {
+      e.stopPropagation();
+      onClick();
+      closePopovers();
+    };
+    addPopover.appendChild(item);
+  }
+
   function openAddPopover() {
     if (!addPopover.hidden) { closePopovers(); return; }
     closePopovers();
     addPopover.innerHTML = "";
-    const item = document.createElement("div");
-    item.className = "toolbar-popover-item";
-    item.innerHTML = `<span class="add-item-icon">${ICON.upload}</span><span>Upload from computer</span>`;
-    item.onclick = (e) => {
-      e.stopPropagation();
+
+    addMenuSection("Add");
+    addMenuItem(ICON.paperclip || ICON.folder, "Files and folders", "Attach paths for Grok to read", () => {
       vscode.postMessage({ type: "pickFile" });
-      closePopovers();
-    };
-    addPopover.appendChild(item);
+    });
+    addMenuItem(ICON.listTree, "Plan mode", state.currentModeId === "plan" ? "Already on — open mode picker to switch" : "Turn plan mode on", () => {
+      if (state.currentModeId !== "plan") {
+        vscode.postMessage({ type: "setMode", modeId: "plan" });
+      } else {
+        openModePopover();
+      }
+    });
+
+    addMenuSection("Session");
+    addMenuItem(ICON.gitBranch, "New worktree session", "Isolated git checkout + new chat", () => {
+      vscode.postMessage({ type: "newWorktreeSession" });
+    });
+    addMenuItem(ICON.gitBranch, "Fork into worktree", "Branch this conversation into a worktree", () => {
+      vscode.postMessage({ type: "forkIntoWorktree" });
+    });
+    addMenuItem(ICON.folder, "Manage worktrees", "Apply, open, or remove worktrees", () => {
+      vscode.postMessage({ type: "manageWorktrees" });
+    });
+    addMenuItem(ICON.upload, "Apply this worktree", "Ship differing files to the workspace", () => {
+      vscode.postMessage({ type: "applyFocusedWorktree" });
+    });
+
+    addMenuSection("Input");
+    addMenuItem(ICON.mic, "Voice control", state.voiceConfigured ? "Dictate with the microphone" : "Set up voice (needs API key)", () => {
+      if (micBtn) micBtn.click();
+    });
+
     positionPopover(addPopover, addBtn);
     addPopover.hidden = false;
+  }
+
+  // Fill the model popover with Reasoning + Model as one collection.
+  function fillModelEffortCollection() {
+    if (!modelPopover) return;
+    modelPopover.innerHTML = "";
+
+    const reasoningHdr = document.createElement("div");
+    reasoningHdr.className = "popover-section popover-section-first";
+    reasoningHdr.textContent = "Reasoning";
+    modelPopover.appendChild(reasoningHdr);
+
+    // Empty string = model default (shown as a row).
+    const effortOptions = [{ id: "", label: "Default", tip: "Use the model's default effort" }].concat(
+      EFFORT_LEVELS.map((id) => ({ id, label: EFFORT_LABELS[id] || capitalize(id), tip: EFFORT_TOOLTIPS[id] })),
+    );
+    const curEffort = currentEffortId();
+    for (const opt of effortOptions) {
+      const el = document.createElement("div");
+      const active = opt.id === curEffort || (!opt.id && !curEffort);
+      el.className = "toolbar-popover-item" + (active ? " active" : "");
+      el.innerHTML =
+        `<span class="chip-menu-label">${escapeHtml(opt.label)}</span>` +
+        (active ? '<span class="popover-check">✓</span>' : "");
+      el.title = opt.tip || opt.label;
+      el.onclick = (e) => {
+        e.stopPropagation();
+        state.effort = opt.id;
+        vscode.postMessage({ type: "setEffort", level: state.effort });
+        updateModelChip();
+        // Keep the collection open so the user can also change the model.
+        fillModelEffortCollection();
+      };
+      modelPopover.appendChild(el);
+    }
+
+    const modelHdr = document.createElement("div");
+    modelHdr.className = "popover-section";
+    modelHdr.textContent = "Model";
+    modelPopover.appendChild(modelHdr);
+
+    const models = state.availableModels.length
+      ? state.availableModels
+      : [{ modelId: state.currentModelId || "grok-build", name: state.currentModelId || "grok-build" }];
+    for (const m of models) {
+      const el = document.createElement("div");
+      const active = m.modelId === state.currentModelId;
+      el.className = "toolbar-popover-item" + (active ? " active" : "");
+      el.innerHTML =
+        `${ICON.zap}<span class="chip-menu-label">${escapeHtml(truncate(m.name || m.modelId, 32))}</span>` +
+        (active ? '<span class="popover-check">✓</span>' : "");
+      el.title = m.modelId;
+      el.onclick = (e) => {
+        e.stopPropagation();
+        vscode.postMessage({ type: "setModel", modelId: m.modelId });
+        closePopovers();
+      };
+      modelPopover.appendChild(el);
+    }
+  }
+
+  // One collection: Reasoning + Model in a single nested menu (ChatGPT-style).
+  function openModelChipPopover() {
+    if (!modelPopover || !modelChipBtn) return;
+    if (!modelPopover.hidden) { closePopovers(); return; }
+    if (state.busy) return;
+    closePopovers();
+    fillModelEffortCollection();
+    positionPopover(modelPopover, modelChipBtn);
+    modelPopover.hidden = false;
   }
 
   // Dashboard dot in the history dropdown. Gray (the `none` default) at rest; the
@@ -1662,9 +1852,11 @@
         const meta = document.createElement("div");
         meta.className = "history-row-meta";
         const parts = [];
+        if (s.worktreeLabel) parts.push(`Worktree · ${s.worktreeLabel}`);
         if (s.numMessages) parts.push(`${s.numMessages} msg`);
         parts.push(formatRelativeTime(s.updatedAt));
         meta.textContent = parts.join(" · ");
+        if (s.worktreeLabel && s.cwd) meta.title = s.cwd;
         main.appendChild(meta);
 
         // Whole row is the click target; the rename/delete buttons below
@@ -4372,7 +4564,16 @@
     // readiness flag, `busy` always clears, so the control can never get stuck.
     modeBtn.disabled = state.busy;
     modeBtn.classList.toggle("disabled", state.busy);
-    modeBtn.title = state.busy ? "Mode — available once the session is ready" : "Pick mode";
+    {
+      const meta = MODE_META[state.currentModeId] || MODE_META.agent;
+      modeBtn.title = state.busy
+        ? "Mode — available once the session is ready"
+        : (meta.desc || "How should Grok actions be approved?");
+    }
+    if (modelChipBtn) {
+      modelChipBtn.disabled = state.busy;
+      modelChipBtn.classList.toggle("disabled", state.busy);
+    }
     if (!state.busy) {
       sendBtn.innerHTML = ICON.arrowUp;
       sendBtn.title = "Send";
@@ -4723,6 +4924,7 @@
         state.effort = msg.effort || "";
         state.cwd = msg.cwd || "";
         state.extVersion = msg.extVersion || "";
+        refreshComposerChips();
         if (typeof msg.showThinking === "boolean") state.showThinking = msg.showThinking;
         if (typeof msg.expandCommandOutputs === "boolean") state.expandCommandOutputs = msg.expandCommandOutputs;
         if (typeof msg.steerByDefault === "boolean") state.steerByDefault = msg.steerByDefault;
@@ -4793,6 +4995,7 @@
         const m = state.availableModels.find((x) => x.modelId === msg.currentModelId);
         if (m?.totalContextTokens) state.contextWindow = m.totalContextTokens;
         updateDonut(0);
+        refreshComposerChips();
         break;
       }
       case "modelChanged": {
@@ -4803,6 +5006,7 @@
         // donut keeps showing the wrong ceiling and an inflated percentage.
         const m = state.availableModels.find((x) => x.modelId === msg.modelId);
         if (m && m.totalContextTokens) { state.contextWindow = m.totalContextTokens; updateDonut(); }
+        refreshComposerChips();
         break;
       }
       case "modeChanged":
@@ -5330,6 +5534,7 @@
         }
         // Refresh the gear popover's model/effort lock state if it's open.
         if (!gearPopover.hidden) renderGearMain();
+        refreshComposerChips();
         break;
       case "summarizing": {
         clearWelcome();
@@ -5437,6 +5642,9 @@
     vscode.postMessage({ type: "newSession" });
   };
   modeBtn.onclick = (e) => { e.stopPropagation(); if (state.busy) return; openModePopover(); };
+  if (modelChipBtn) {
+    modelChipBtn.onclick = (e) => { e.stopPropagation(); openModelChipPopover(); };
+  }
   gearBtn.onclick = (e) => { e.stopPropagation(); openGearPopover(); };
 
   // Welcome screen's "about" link → open the gear popover's Version & about panel.
@@ -5449,6 +5657,7 @@
     if (contextPopover.hidden) openContextPopover(); else closePopovers();
   };
   modePopover.addEventListener("click", (e) => e.stopPropagation());
+  if (modelPopover) modelPopover.addEventListener("click", (e) => e.stopPropagation());
   gearPopover.addEventListener("click", (e) => e.stopPropagation());
   contextPopover.addEventListener("click", (e) => e.stopPropagation());
   addPopover.addEventListener("click", (e) => e.stopPropagation());

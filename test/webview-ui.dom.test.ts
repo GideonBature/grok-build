@@ -978,6 +978,68 @@ describe("Auto accept mode label (#25 rename)", () => {
   });
 });
 
+describe("composer model/effort chips + richer + menu (Codex-style polish)", () => {
+  it("paints a combined model+effort chip and one nested collection for both", () => {
+    const { window, posted, doc } = bootWebview();
+    dispatch(window, {
+      type: "session",
+      sessionId: "s1",
+      currentModelId: "grok-build",
+      models: [
+        { modelId: "grok-build", name: "Grok Build" },
+        { modelId: "other", name: "Other" },
+      ],
+    });
+    const modelChip = $(doc, "model-chip-btn") as HTMLButtonElement;
+    // Single pill: model name + effort label (e.g. "Grok Build Default").
+    expect(modelChip.textContent).toMatch(/Grok Build/);
+    expect(modelChip.textContent).toMatch(/Default|Light|Medium|High|None|Minimal|Extra/);
+    // No separate effort chip.
+    expect(doc.getElementById("effort-chip-btn")).toBeNull();
+
+    click(window, modelChip);
+    const pop = $(doc, "model-popover") as HTMLElement;
+    expect((pop as any).hidden).toBe(false);
+    // One collection: Reasoning section + Model section.
+    const sections = [...pop.querySelectorAll(".popover-section")].map((s) => s.textContent);
+    expect(sections).toContain("Reasoning");
+    expect(sections).toContain("Model");
+
+    const high = [...pop.querySelectorAll(".toolbar-popover-item")]
+      .find((el) => {
+        const t = el.textContent || "";
+        return t.includes("High") && !t.includes("Extra");
+      }) as HTMLElement;
+    click(window, high);
+    expect(posted.some((p) => p.type === "setEffort" && p.level === "high")).toBe(true);
+    // Effort pick keeps the collection open so the user can also change model.
+    expect((pop as any).hidden).toBe(false);
+    expect(modelChip.textContent).toMatch(/High/);
+
+    const other = [...pop.querySelectorAll(".toolbar-popover-item")]
+      .find((el) => el.textContent?.includes("Other")) as HTMLElement;
+    click(window, other);
+    expect(posted).toContainEqual({ type: "setModel", modelId: "other" });
+  });
+
+  it("offers files, plan mode, and worktree actions from the + menu", () => {
+    const { window, posted, doc } = bootWebview();
+    click(window, $(doc, "add-btn"));
+    const pop = $(doc, "add-popover");
+    expect((pop as any).hidden).toBe(false);
+    const labels = [...pop.querySelectorAll(".add-item-label")].map((l) => l.textContent);
+    expect(labels).toContain("Files and folders");
+    expect(labels).toContain("Plan mode");
+    expect(labels).toContain("New worktree session");
+    expect(labels).toContain("Manage worktrees");
+
+    const files = [...pop.querySelectorAll(".add-menu-item")]
+      .find((el) => el.querySelector(".add-item-label")?.textContent === "Files and folders") as HTMLElement;
+    click(window, files);
+    expect(posted).toContainEqual({ type: "pickFile" });
+  });
+});
+
 describe("thinking traces toggle (#26)", () => {
   it("applies the hidden body class from initialState (off by default)", () => {
     const { window, doc } = bootWebview();

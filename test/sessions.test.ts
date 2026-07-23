@@ -12,6 +12,7 @@ import {
   extractUserQueries,
   fallbackName,
   indexSessions,
+  indexSessionsMany,
   isEmptyPrimerSession,
   isPathInside,
   listSessions,
@@ -372,6 +373,36 @@ describe("indexSessions", () => {
       [path.join(dirFor("real"), "summary.json")]: { isDir: false, content: "{}", mtimeMs: 1 },
     });
     expect(indexSessions({ fs, grokHome, cwd }).map((e) => e.id)).toEqual(["real"]);
+  });
+
+  it("stamps cwd on each index entry", () => {
+    const fs = buildFs({
+      [dir]: { isDir: true },
+      [dirFor("a")]: { isDir: true },
+      [path.join(dirFor("a"), "summary.json")]: { isDir: false, content: "{}", mtimeMs: 1 },
+    });
+    expect(indexSessions({ fs, grokHome, cwd })[0]).toMatchObject({ id: "a", cwd });
+  });
+});
+
+describe("indexSessionsMany", () => {
+  it("merges several cwds newest-first and tags each entry's cwd", () => {
+    const cwdA = "/proj";
+    const cwdB = "/proj-wt";
+    const dirA = sessionsDirFor(grokHome, cwdA);
+    const dirB = sessionsDirFor(grokHome, cwdB);
+    const fs = buildFs({
+      [dirA]: { isDir: true },
+      [dirB]: { isDir: true },
+      [path.join(dirA, "old")]: { isDir: true },
+      [path.join(dirB, "new")]: { isDir: true },
+      [path.join(dirA, "old", "summary.json")]: { isDir: false, content: "{}", mtimeMs: 100 },
+      [path.join(dirB, "new", "summary.json")]: { isDir: false, content: "{}", mtimeMs: 300 },
+    });
+    const out = indexSessionsMany({ fs, grokHome, cwds: [cwdA, cwdB, ""] });
+    expect(out.map((e) => e.id)).toEqual(["new", "old"]);
+    expect(out[0].cwd).toBe(cwdB);
+    expect(out[1].cwd).toBe(cwdA);
   });
 });
 

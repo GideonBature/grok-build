@@ -52,6 +52,11 @@ export const INBOUND_DISPOSITION: Record<WebviewMsg["type"], InboundDisposition>
   clearQueuedSends: "propose",
   steerSend: "propose",
   forkSession: "propose",
+  // Worktree create/manage/fork-into use VS Code input boxes + QuickPick — host window only.
+  newWorktreeSession: "host-local",
+  manageWorktrees: "host-local",
+  forkIntoWorktree: "host-local",
+  applyFocusedWorktree: "host-local",
   pasteImage: "propose",
   removeChip: "propose",
   toggleChip: "propose",

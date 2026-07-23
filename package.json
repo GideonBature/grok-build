@@ -84,6 +84,22 @@
         "title": "Grok: New Session"
       },
       {
+        "command": "grok.newWorktreeSession",
+        "title": "Grok: New Worktree Session"
+      },
+      {
+        "command": "grok.manageWorktrees",
+        "title": "Grok: Manage Worktrees"
+      },
+      {
+        "command": "grok.forkIntoWorktree",
+        "title": "Grok: Fork Conversation into Worktree"
+      },
+      {
+        "command": "grok.applyFocusedWorktree",
+        "title": "Grok: Apply This Worktree to Workspace"
+      },
+      {
         "command": "grok.compact",
         "title": "Grok: Compact Conversation"
       },

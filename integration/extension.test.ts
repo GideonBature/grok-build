@@ -21,7 +21,16 @@ suite("grok-build extension smoke", () => {
   test("registers its contributed commands", async () => {
     const all = await vscode.commands.getCommands(true);
     // A stable subset that must always exist (the full list lives in package.json).
-    for (const id of ["grok.open", "grok.newSession", "grok.showLogs", "grok.logout"]) {
+    for (const id of [
+      "grok.open",
+      "grok.newSession",
+      "grok.newWorktreeSession",
+      "grok.manageWorktrees",
+      "grok.forkIntoWorktree",
+      "grok.applyFocusedWorktree",
+      "grok.showLogs",
+      "grok.logout",
+    ]) {
       assert.ok(all.includes(id), `command not registered: ${id}`);
     }
     // The gear-menu "Move view" items depend on these workbench commands

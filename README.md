@@ -36,7 +36,7 @@ When Grok proposes an edit, hit **open diff →** to review it in VS Code's nati
 <details>
 <summary><strong>Modes — Agent, Plan & Auto accept</strong></summary>
 
-Switch from the bottom toolbar. **Plan** is enforced by the *extension*, not the CLI — workspace writes and non-read-only commands are genuinely blocked until you approve the plan (see [How it works](#how-it-works)). **Auto accept** approves actions automatically, and flips on or off mid-session.
+Switch from the composer mode chip (Agent / Plan / Auto). **Plan** is enforced by the *extension*, not the CLI — workspace writes and non-read-only commands are genuinely blocked until you approve the plan (see [How it works](#how-it-works)). **Auto accept** approves actions automatically, and flips on or off mid-session. The mode picker describes each option in plain language (ask for approval / plan first / approve for me).
 
 ![The mode picker — Agent, Plan, and Auto accept](docs/screenshots/agent_modes.png)
 
@@ -118,6 +118,15 @@ Gear → *Fork conversation* copies the conversation into a **new session** name
 </details>
 
 <details>
+<summary><strong>Worktree sessions</strong> — parallel work on an isolated git checkout</summary>
+
+**`Grok: New Worktree Session`** (Command Palette or gear → Session) creates a Grok-managed git worktree (optional name + base ref) and opens a **new agent session rooted there**. Edits land under `~/.grok/worktrees/…`, not your main tree.
+
+**`Grok: Fork Conversation into Worktree`** copies the current chat into a **new worktree session** — conversation branched *and* code isolated. **`Grok: Manage Worktrees`** lists worktrees and can **Apply to workspace** (preview differing files, multi-select, then ship), open the folder, start a session there, or **remove** the worktree. **`Grok: Apply This Worktree to Workspace`** does the same for the focused worktree session. History rows show a `Worktree · <label>` badge; deleting such a session can also remove the worktree.
+
+</details>
+
+<details>
 <summary><strong>Context & cost</strong> — what's in the window, and what the turns actually bill</summary>
 
 Click the **context donut** for the exact `used / window (%)`, plus what the conversation has **billed** — input, cache read, output — as a session total and a per-turn split with its model calls. **Compact conversation** lives here too, right next to the number that tells you when you need it.
@@ -165,14 +174,14 @@ A ` ```mermaid ` block renders as a real diagram via [Mermaid](https://mermaid.j
 <details>
 <summary><strong>Model picker</strong> — switch models live, no restart</summary>
 
-Click the model name in the gear popover. The list comes from your CLI; switching is live in most cases. (A few models belong to a different agent and need a quick restart — the extension detects that and carries your context forward.)
+Use the **model chip** on the composer (or gear → Model). The list comes from your CLI; switching is live in most cases. (A few models belong to a different agent and need a quick restart — the extension detects that and carries your context forward.)
 
 </details>
 
 <details>
 <summary><strong>Reasoning effort</strong> — trade tokens for depth</summary>
 
-Gear → the effort dots next to the model, `none` → `xhigh`. On recent CLIs it applies **live** to the running session; older ones restart, with an optional *Summarize & Restart* that carries context forward.
+Composer **effort chip** (or gear dots): `none` → `xhigh`, shown as None / Minimal / Light / Medium / High / Extra High. On recent CLIs it applies **live** to the running session; older ones restart, with an optional *Summarize & Restart* that carries context forward.
 
 ![Model and reasoning-effort picker in the gear menu](docs/screenshots/effort.png)
 
@@ -250,6 +259,10 @@ VS Code commands (not Grok slash commands):
 |---|---|
 | `Grok: Open` | Open the Grok sidebar |
 | `Grok: New Session` | Start a fresh session |
+| `Grok: New Worktree Session` | Create an isolated git worktree and open a session rooted there |
+| `Grok: Manage Worktrees` | List worktrees; apply to workspace, open, or remove |
+| `Grok: Fork Conversation into Worktree` | Fork the chat into a new isolated git worktree session |
+| `Grok: Apply This Worktree to Workspace` | Preview + ship the focused worktree's files into the main tree |
 | `Grok: Compact Conversation` | Compact the current session to reclaim context |
 | `Grok: Pick Model` | Open the model picker |
 | `Grok: Toggle Plan / Agent Mode` | Open the mode picker (Agent / Plan / Auto accept) |
@@ -304,7 +317,7 @@ npm run package  # → grok-vscode-phuryn-<version>.vsix
 ## Known limits
 
 - **Diff preview semantics.** The diff editor compares the proposed old vs. new text against each other, not against the file on disk at preview time; the write happens only after approval.
-- **No worktree UI.** `Grok: New Worktree Session` is planned but not yet implemented.
+- **Worktree apply is host-assisted.** The CLI’s `apply` RPC is called, but differing files are also shipped host-side (`shipWorktreeFiles`) because CoW worktrees don’t always merge into the source tree on `apply` alone (see `research/worktree.md`).
 - **View placement.** The view defaults to the **Secondary Side Bar** (requires VS Code 1.106+, the extension's engine floor). Relocate it anytime via gear → **Config & debug** → **Move view** (one click: Panel / Primary Side Bar / Secondary Side Bar) — useful in Cursor, whose side-bar context menu hides the built-in "Move To" entry.
 
 ---

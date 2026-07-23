@@ -152,6 +152,15 @@ export class Session {
   activeSessionId?: string;
 
   /**
+   * Working directory for this session's `grok agent stdio` process and
+   * `session/new` / `session/load` cwd. Defaults to the VS Code workspace root
+   * when unset. Worktree sessions set this to the isolated worktree path so
+   * agent file ops + session storage (`~/.grok/sessions/<urlencoded-cwd>/…`)
+   * land in the right place — not the main workspace tree.
+   */
+  cwd?: string;
+
+  /**
    * Session-scoped `[Image #N]` counter — the highest index used so far.
    * Incremented per attached image and NEVER reset on send, so every image in
    * one conversation gets a distinct tag (per-composer numbering would restart

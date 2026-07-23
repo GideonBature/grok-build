@@ -197,7 +197,13 @@ export type WebviewMsg =
   // prompt itself, so a -32601 fallback can re-queue the text without losing it.
   | { type: "steerSend"; text: string }
   // Fork (#48): branch this session's conversation into a new one and focus it.
-  | { type: "forkSession" };
+  | { type: "forkSession" }
+  // Worktree UI: create a new isolated session, manage picker, fork-into-worktree,
+  // or apply the focused session's worktree back to the workspace.
+  | { type: "newWorktreeSession" }
+  | { type: "manageWorktrees" }
+  | { type: "forkIntoWorktree" }
+  | { type: "applyFocusedWorktree" };
 
 // Exhaustive maps: `Record<Union["type"], true>` forces every discriminant to be
 // a key (missing -> tsc error) and forbids any extra (excess-property -> tsc
@@ -233,7 +239,8 @@ const WEBVIEW_MESSAGE_TYPE_MAP: Record<WebviewMsg["type"], true> = {
   listSessions: true, resumeSession: true, renameSession: true, deleteSession: true,
   clearAllSessions: true, pickFile: true, pasteImage: true, voiceStart: true,
   voiceStop: true, queueSend: true, dequeueSend: true, clearQueuedSends: true,
-  steerSend: true, forkSession: true,
+  steerSend: true, forkSession: true, newWorktreeSession: true, manageWorktrees: true,
+  forkIntoWorktree: true, applyFocusedWorktree: true,
 };
 
 export const HOST_MESSAGE_TYPES: readonly HostMsg["type"][] = Object.keys(HOST_MESSAGE_TYPE_MAP) as HostMsg["type"][];

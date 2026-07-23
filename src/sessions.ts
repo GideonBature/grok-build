@@ -23,10 +23,24 @@ export interface SessionListEntry {
    *  delegation persists its child as a top-level session dir with
    *  `session_kind: "subagent"`; the history list hides those. */
   kind?: "subagent";
+  /**
+   * When set, this session runs in a git worktree (not the workspace root).
+   * The webview history row shows a worktree badge; value is the short label
+   * (basename or user-provided name).
+   */
+  worktreeLabel?: string;
 }
 
 export interface SessionMetaOverride {
   customName?: string;
+  /**
+   * Session cwd when it isn't the workspace root (worktree sessions). Required
+   * to open/delete/sweep the right `~/.grok/sessions/<urlencoded-cwd>/` dir and
+   * to include the session in the multi-cwd history index.
+   */
+  cwd?: string;
+  /** User- or CLI-facing worktree label, when this session runs in a worktree. */
+  worktreeLabel?: string;
   pinnedAt?: number;
   /** Session-cumulative billing (#53). Ours, not grok's: the CLI reports usage
    *  per prompt and persists only context size in `signals.json`, so this is the
@@ -173,6 +187,8 @@ export interface SessionIndexEntry {
   /** Modification time of the session's `summary.json` (ms). A cheap proxy for last activity —
    *  grok rewrites that file (which also holds `updated_at`) on every turn. */
   mtimeMs: number;
+  /** The cwd whose sessions dir this id was found under (workspace or a worktree path). */
+  cwd: string;
 }
 
 export interface IndexDeps {
@@ -209,10 +225,30 @@ export function indexSessions(deps: IndexDeps): SessionIndexEntry[] {
     } catch {
       continue;
     }
-    out.push({ id: name, mtimeMs: st.mtimeMs });
+    out.push({ id: name, mtimeMs: st.mtimeMs, cwd });
   }
   out.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return out;
+}
+
+/**
+ * Index sessions across several cwds (workspace + worktrees), newest-first.
+ * When the same id appears under two cwds (shouldn't happen in practice), the
+ * newer mtime wins. Pure composition over {@link indexSessions}.
+ */
+export function indexSessionsMany(
+  deps: Omit<IndexDeps, "cwd"> & { cwds: string[] },
+): SessionIndexEntry[] {
+  const { cwds, ...rest } = deps;
+  const byId = new Map<string, SessionIndexEntry>();
+  for (const cwd of cwds) {
+    if (!cwd) continue;
+    for (const e of indexSessions({ ...rest, cwd })) {
+      const prev = byId.get(e.id);
+      if (!prev || e.mtimeMs > prev.mtimeMs) byId.set(e.id, e);
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
 export interface ReadEntriesDeps {
