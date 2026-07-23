@@ -3413,7 +3413,8 @@ See design doc for the full state machine diagram.`;
    * file no longer contains the applied text (already undone, or later edits).
    */
   private async undoAppliedEdit(filePath: string, oldText: string, newText: string): Promise<void> {
-    const cwd = this.cwd();
+    // Prefer the focused session's cwd so worktree-relative paths resolve correctly.
+    const cwd = this.focused?.cwd || this.workspaceCwd();
     const abs = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
     try {
       const uri = vscode.Uri.file(abs);
