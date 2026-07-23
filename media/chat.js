@@ -4135,30 +4135,39 @@
     if (state.showThinking) hideThinkingIndicator();
   }
 
-  // True when *something* already tells the user grok is mid-work or awaiting
-  // them: a waiting indicator, a running tool group, streaming agent text, a
-  // visible thinking block (only counts when traces are shown — hidden ones are
-  // display:none), or an open permission/question/plan card.
+  // True when an *animated* affordance already tells the user grok is mid-work
+  // or awaiting them. Static agent text deliberately does NOT count — after
+  // narration the bubble looks finished, and the next read/edit batch (or a
+  // quiet inference gap) can take many seconds with no further stream events.
+  // Treating the bubble as "activity" left the chat looking hung. Animated
+  // signals only: Grokking / Thinking stand-in / running tool group / plan
+  // processing / visible thinking block (when traces are shown) / open card /
+  // a still-running subagent row (blink-dots).
   function turnHasVisibleActivity() {
     return !!(
       state.grokkingEl ||
       state.thinkingIndicatorEl ||
       state.planProcessingEl ||
       state.activeToolGroupEl ||
-      (state.activeAgentEl && (state.activeAgentRaw || "").trim()) ||
       (state.showThinking && state.activeThoughtEl) ||
-      messagesEl.querySelector(".card:not(.resolved)")
+      messagesEl.querySelector(".card:not(.resolved)") ||
+      messagesEl.querySelector(".subagent-card .blink-dots")
     );
   }
 
   // Guarantee a live turn never looks idle: while the user's turn is in flight
-  // (busy, not the locked priming window, not replaying), at least one progress
-  // affordance — Grokking / Tools / Thinking — must be on screen. If a step left
-  // nothing visible, stand in with the generic "Grokking…"; the next real chunk
-  // replaces it. Called after each mid-turn event the agent emits.
+  // (busy, not the locked priming window, not replaying), at least one *animated*
+  // progress affordance — Grokking / Tools / Thinking — must be on screen. If a
+  // step left only static content (e.g. a finished agent bubble between tool
+  // batches), stand in with "Grokking…"; the next tool/thought/card replaces it.
+  // Called after each mid-turn event the agent emits. When Grokking is already
+  // up, re-pin it to the end so it stays under the latest stream chunk.
   function ensureActivityIndicator() {
     if (!state.busy || state.busyLocked || state.replaying) return;
-    if (turnHasVisibleActivity()) return;
+    if (turnHasVisibleActivity()) {
+      if (state.grokkingEl) messagesEl.appendChild(state.grokkingEl);
+      return;
+    }
     showGrokking();
   }
 

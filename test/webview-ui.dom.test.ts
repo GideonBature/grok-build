@@ -582,12 +582,18 @@ describe("Grokking… indicator (waiting placeholder)", () => {
     expect(doc.querySelector(".msg.thinking")).not.toBeNull();
   });
 
-  it("is replaced by the agent bubble when the turn streams text without thinking", () => {
+  it("stays under the agent bubble while text streams (static narration is not enough progress)", () => {
+    // Mid-turn narration alone used to clear Grokking, which made the next
+    // quiet read/edit stretch look hung. Keep the orbit under the bubble until
+    // a tool / thought / turn-end takes over.
     const { window, doc } = bootWebview();
+    dispatch(window, { type: "setBusy", value: true });
     dispatch(window, { type: "agentStart" });
     dispatch(window, { type: "messageChunk", text: "Here is the answer." });
-    expect(grokking(doc)).toBeNull();
     expect(doc.querySelector(".msg.agent")).not.toBeNull();
+    expect(grokking(doc)).not.toBeNull();
+    dispatch(window, { type: "agentEnd" });
+    expect(grokking(doc)).toBeNull();
   });
 
   it("is replaced when the first content of the turn is a tool call", () => {
@@ -1248,13 +1254,14 @@ describe("scroll-to-bottom button (#28)", () => {
 });
 
 describe("continuous progress indicator (always show something mid-turn)", () => {
-  // A *live* progress affordance: Grokking / a running tool group / Thinking /
-  // plan-processing / streaming message / an open card. A CSS-hidden thinking
-  // block does NOT count (that's the whole point of the stand-in).
+  // A *live animated* progress affordance: Grokking / a running tool group /
+  // Thinking / plan-processing / an open card. Static agent text does NOT
+  // count — a finished-looking bubble is what made long read/edit stretches
+  // look hung. A CSS-hidden thinking block also does not count (stand-in).
   const hasLiveIndicator = (doc: Document) => {
     if (
       doc.querySelector(
-        ".grokking, .thinking-indicator, .tool-group.in-progress, .plan-processing, .msg.agent, .card:not(.resolved)",
+        ".grokking, .thinking-indicator, .tool-group.in-progress, .plan-processing, .card:not(.resolved), .subagent-card .blink-dots",
       )
     )
       return true;
@@ -1306,6 +1313,35 @@ describe("continuous progress indicator (always show something mid-turn)", () =>
     // A bare completed-tool update with no prior group leaves nothing on its own…
     dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "x", status: "completed" } });
     expect(doc.querySelector(".grokking")).not.toBeNull(); // …so the safety net stands in
+  });
+
+  it("re-shows Grokking under agent narration so a quiet gap never looks finished", () => {
+    // Regression: static agent text used to count as "activity", so after a
+    // mid-turn "I'll edit the files…" bubble the chat looked idle for the
+    // whole subsequent read/edit stretch until the next stream event.
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "setBusy", value: true });
+    dispatch(window, { type: "agentStart" });
+    expect(doc.querySelector(".grokking")).not.toBeNull();
+
+    dispatch(window, { type: "messageChunk", text: "I'll update the helper next." });
+    // Narration alone is not enough — Grokking must stay under the bubble.
+    const agent = doc.querySelector(".msg.agent") as HTMLElement | null;
+    const grok = doc.querySelector(".grokking") as HTMLElement | null;
+    expect(agent).not.toBeNull();
+    expect(grok).not.toBeNull();
+    // Grokking is pinned *after* the agent bubble (last progress signal).
+    const pos = agent!.compareDocumentPosition(grok!);
+    expect(pos & window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // A real tool group takes over the indicator (no dual Grokking + tools).
+    dispatch(window, {
+      type: "toolCall",
+      call: { toolCallId: "r1", kind: "read", title: "Read `a.ts`", rawInput: { path: "a.ts" } },
+    });
+    expect(doc.querySelector(".tool-group.in-progress")).not.toBeNull();
+    expect(doc.querySelector(".grokking")).toBeNull();
+    expect(doc.querySelector(".tool-group-label")!.textContent).toMatch(/Reading/i);
   });
 
   it("does not stand in during the locked priming window", () => {
